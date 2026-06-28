@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Tomb of the Mask — MVP</title>
+<style>
+  :root{
+    --bg:#0a0e1a; --wallface:#0e1c38; --wall-glow:#2f7df0;
+    --neon:#25e0d8; --gold:#ffcb3d; --spike:#ff3b6b; --exit:#b14dff; --ink:#cfe6ff;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;background:var(--bg);color:var(--ink);
+    font-family:'Courier New',monospace;overflow:hidden;user-select:none;-webkit-user-select:none;touch-action:none}
+  #app{height:100dvh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:12px}
+  .hud{width:min(92vmin,560px);display:flex;justify-content:space-between;align-items:flex-end;letter-spacing:1px}
+  .hud .label{font-size:11px;opacity:.55;text-transform:uppercase}
+  .hud .value{font-size:22px;font-weight:bold;color:var(--neon);text-shadow:0 0 12px rgba(37,224,216,.6)}
+  .hud .value.gold{color:var(--gold);text-shadow:0 0 12px rgba(255,203,61,.6)}
+  .title{font-size:13px;letter-spacing:4px;text-transform:uppercase;color:var(--exit);text-shadow:0 0 14px rgba(177,77,255,.7)}
+  #stage{position:relative;width:min(92vmin,560px);height:min(92vmin,560px);border-radius:8px;background:#060911;
+    box-shadow:0 0 0 2px rgba(47,125,240,.25),0 0 40px rgba(37,224,216,.12) inset}
+  canvas{display:block;width:100%;height:100%;border-radius:8px}
+  .overlay{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
+    gap:14px;text-align:center;padding:24px;background:rgba(6,9,17,.84);backdrop-filter:blur(3px);border-radius:8px;z-index:5}
+  .overlay.hidden{display:none}
+  .overlay h1{font-size:26px;letter-spacing:3px;color:var(--gold);text-shadow:0 0 18px rgba(255,203,61,.6)}
+  .overlay h2{font-size:19px;letter-spacing:2px;color:var(--neon)}
+  .overlay p{font-size:13px;opacity:.85;line-height:1.7;max-width:340px}
+  .stars-row{font-size:30px;letter-spacing:6px}
+  .stat{color:var(--gold);font-weight:bold}
+  button{font-family:inherit;cursor:pointer;background:transparent;color:var(--neon);border:2px solid var(--neon);
+    border-radius:6px;padding:12px 26px;font-size:15px;letter-spacing:2px;text-transform:uppercase;transition:.15s;
+    box-shadow:0 0 14px rgba(37,224,216,.25)}
+  button:hover,button:active{background:var(--neon);color:#060911;box-shadow:0 0 22px rgba(37,224,216,.6)}
+  .hint{font-size:11px;opacity:.5;letter-spacing:1px;text-align:center}
+</style>
+</head>
+<body>
+<div id="app">
+  <div class="hud">
+    <div><div class="label">Level</div><div class="value" id="lvl">1</div></div>
+    <div class="title">Tomb of the Mask</div>
+    <div style="text-align:right"><div class="label">Stars</div><div class="value gold" id="stars">0 / 3</div></div>
+  </div>
+
+  <div id="stage">
+    <canvas id="c"></canvas>
+    <div class="overlay" id="overlay">
+      <h1>Tomb of the Mask</h1>
+      <p>Flick a direction — the mask <b>slides until it hits a wall</b>. Sweep up the <span style="color:var(--gold)">star-dots</span>, grab all <span style="color:var(--gold)">3 big stars</span>, and slide from the start to the <span style="color:var(--exit)">glowing gate</span>.</p>
+      <button id="startBtn">Enter the Tomb</button>
+      <div class="hint">Arrow keys / WASD &nbsp;·&nbsp; or swipe on touch</div>
+    </div>
+  </div>
+
+  <div class="hint" id="footHint">Reach the gate — collect all 3 stars for a perfect run.</div>
+</div>
+
+<script>
+(() => {
+  'use strict';
+  const canvas=document.getElementById('c'), ctx=canvas.getContext('2d');
+  const overlay=document.getElementById('overlay'), startBtn=document.getElementById('startBtn');
+  const lvlEl=document.getElementById('lvl'), starsEl=document.getElementById('stars'), footHint=document.getElementById('footHint');
+
+  const W='#', FLOOR=' ', DOT='.', STAR='S', SPIKE='^', EXIT='E';
+  let grid, rows, cols, cell;
+  let player, exitPos, dotsLeft, dotsTotal, starsGot, starsTotal=3;
+  let levelIndex=0, state='menu', moving=null, moveTimer=0;
+  const MOVE_INTERVAL=40;
+  let anim={t:0};
+
+  // ---------- maze generation ----------
+  function rint(n){return Math.floor(Math.random()*n);}
+
+  function generateMaze(size){
+    const C=size, R=size;
+    const g=Array.from({length:R},()=>Array(C).fill(W));
+    // iterative recursive-backtracker on odd cells
+    const stack=[[1,1]]; g[1][1]=FLOOR;
+    while(stack.length){
+      const [x,y]=stack[stack.length-1];
+      const dirs=[[2,0],[-2,0],[0,2],[0,-2]];
+      for(let i=dirs.length-1;i>0;i--){const j=rint(i+1);[dirs[i],dirs[j]]=[dirs[j],dirs[i]];}
+      let carved=false;
+      for(const [dx,dy] of dirs){
+        const nx=x+dx, ny=y+dy;
+        if(nx>0&&ny>0&&nx<C-1&&ny<R-1&&g[ny][nx]===W){
+          g[y+dy/2][x+dx/2]=FLOOR; g[ny][nx]=FLOOR; stack.push([nx,ny]); carved=true; break;
+        }
+      }
+      if(!carved) stack.pop();
+    }
+    return g;
+  }
+
+  // slide-coverage BFS: returns covered Set("x,y") and dist map from start
+  function coverage(g, sx, sy){
+    const R=g.length, C=g[0].length;
+    const wall=(x,y)=> x<0||y<0||x>=C||y>=R||g[y][x]===W;
+    const key=(x,y)=>x+','+y;
+    const cov=new Set([key(sx,sy)]); const dist={}; dist[key(sx,sy)]=0;
+    const seen=new Set([key(sx,sy)]); const q=[[sx,sy]];
+    while(q.length){
+      const [x,y]=q.shift();
+      const base=dist[key(x,y)];
+      for(const [dx,dy] of [[1,0],[-1,0],[0,1],[0,-1]]){
+        let cx=x, cy=y, moved=false;
+        while(!wall(cx+dx,cy+dy)){
+          cx+=dx; cy+=dy;
+          const kk=key(cx,cy);
+          cov.add(kk);
+          if(dist[kk]===undefined) dist[kk]=base+1; // every cell passed gets a distance, not just stops
+          moved=true;
+        }
+        if(moved && !seen.has(key(cx,cy))){seen.add(key(cx,cy));q.push([cx,cy]);}
+      }
+    }
+    return {cov,dist};
+  }
+
+  function buildLevel(idx){
+    const size = idx<3 ? 15 : idx<6 ? 17 : 19;
+    let g, cov, dist, covArr;
+    // regenerate until we have a healthy, well-spread board
+    for(let tries=0; tries<40; tries++){
+      g=generateMaze(size);
+      const r=coverage(g,1,1); cov=r.cov; dist=r.dist;
+      covArr=[...cov].map(s=>{const [x,y]=s.split(',').map(Number);return {x,y,d:dist[s]};})
+                     .filter(c=>!(c.x===1&&c.y===1));
+      if(covArr.length>30) break;
+    }
+    rows=g.length; cols=g[0].length;
+
+    // exit = farthest reachable cell from start
+    covArr.sort((a,b)=>b.d-a.d);
+    const exitCell=covArr[0];
+    exitPos={x:exitCell.x,y:exitCell.y};
+
+    // 3 big stars: spread across the board, biased to mid/far, kept apart from each other & the exit
+    const candidates=covArr.filter(c=>!(c.x===exitPos.x&&c.y===exitPos.y));
+    const dmax=covArr[0].d || 1;
+    const stars=[];
+    const farEnough=(c,list,min)=>list.every(s=>Math.abs(s.x-c.x)+Math.abs(s.y-c.y)>=min);
+    // target distance bands ~ near, middle, far
+    const bands=[0.45,0.65,0.85];
+    const minSpread=Math.max(4, Math.floor(size*0.4));
+    for(const band of bands){
+      const target=band*dmax;
+      const pool=[...candidates].sort((a,b)=>Math.abs(a.d-target)-Math.abs(b.d-target));
+      for(const c of pool){
+        if(!stars.some(s=>s.x===c.x&&s.y===c.y) && farEnough(c,stars,minSpread)){stars.push(c);break;}
+      }
+    }
+    // fallback to fill 3 if spread was too strict
+    let fi=0;
+    while(stars.length<3 && fi<candidates.length){
+      const c=candidates[fi++];
+      if(!stars.some(s=>s.x===c.x&&s.y===c.y) && !(c.x===exitPos.x&&c.y===exitPos.y)) stars.push(c);
+    }
+
+    // paint collectibles: every reachable cell becomes a dot...
+    for(const c of covArr){ if(g[c.y][c.x]===FLOOR) g[c.y][c.x]=DOT; }
+    // ...except the 3 star cells
+    for(const s of stars){ g[s.y][s.x]=STAR; }
+    // exit cell is the gate (overrides any dot)
+    g[exitPos.y][exitPos.x]=EXIT;
+    // start cell clear
+    g[1][1]=FLOOR;
+
+    // spikes only on dead-end tips (covered, exactly one open neighbor), never on dot-critical paths
+    const tips=covArr.filter(c=>{
+      if(g[c.y][c.x]!==DOT) return false;
+      let open=0;
+      for(const [dx,dy] of [[1,0],[-1,0],[0,1],[0,-1]]) if(g[c.y+dy] && g[c.y+dy][c.x+dx]!==W) open++;
+      return open===1;
+    });
+    for(let i=tips.length-1;i>0;i--){const j=rint(i+1);[tips[i],tips[j]]=[tips[j],tips[i]];}
+    const spikeCount=Math.min(tips.length, 2+idx);
+    for(let i=0;i<spikeCount;i++){ g[tips[i].y][tips[i].x]=SPIKE; }
+
+    grid=g;
+    player={x:1,y:1};
+    dotsLeft=0; dotsTotal=0;
+    for(let y=0;y<rows;y++) for(let x=0;x<cols;x++) if(grid[y][x]===DOT){dotsLeft++;dotsTotal++;}
+    starsGot=0; moving=null; moveTimer=0;
+    resize(); updateHud();
+  }
+
+  function updateHud(){ lvlEl.textContent=levelIndex+1; starsEl.textContent=starsGot+' / '+starsTotal; }
+
+  // ---------- sizing ----------
+  function resize(){
+    const stage=document.getElementById('stage');
+    const size=Math.min(stage.clientWidth, stage.clientHeight);
+    const dpr=Math.min(window.devicePixelRatio||1,2);
+    canvas.width=size*dpr; canvas.height=size*dpr;
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+    cell=size/cols;
+  }
+  window.addEventListener('resize',()=>{if(grid)resize();});
+
+  // ---------- movement ----------
+  const isWall=(x,y)=> x<0||y<0||x>=cols||y>=rows||grid[y][x]===W;
+
+  function tryStartMove(dx,dy){
+    if(state!=='playing'||moving) return;
+    if(isWall(player.x+dx,player.y+dy)) return;
+    moving={dx,dy}; moveTimer=0;
+  }
+  function stepSlide(){
+    const nx=player.x+moving.dx, ny=player.y+moving.dy;
+    if(isWall(nx,ny)){moving=null;return;}
+    player.x=nx; player.y=ny; onEnter();
+  }
+  function onEnter(){
+    const t=grid[player.y][player.x];
+    if(t===DOT){grid[player.y][player.x]=FLOOR;dotsLeft--;blip(660,0.05);}
+    else if(t===STAR){grid[player.y][player.x]=FLOOR;starsGot++;updateHud();blip(990,0.12);}
+    else if(t===SPIKE){die();return;}
+    if(player.x===exitPos.x && player.y===exitPos.y){winLevel();}
+  }
+  function die(){
+    state='dead'; moving=null; blip(140,0.25,'sawtooth');
+    showOverlay(`<h2 style="color:var(--spike)">Impaled</h2>
+      <p>A spike caught the mask. Dead-ends bite — slide past them, not into them.</p>
+      <button id="retryBtn">Retry Chamber</button>`);
+    document.getElementById('retryBtn').onclick=()=>{hideOverlay();buildLevel(levelIndex);state='playing';};
+  }
+  function winLevel(){
+    state='win'; moving=null; blip(880,0.12);
+    const filled='★'.repeat(starsGot), empty='☆'.repeat(starsTotal-starsGot);
+    const perfect = starsGot===starsTotal && dotsLeft===0;
+    const last = levelIndex+1>=999;
+    showOverlay(`<h2>${perfect?'Perfect Chamber':'Chamber Cleared'}</h2>
+      <div class="stars-row" style="color:var(--gold)">${filled}<span style="opacity:.3">${empty}</span></div>
+      <p>Star-dots: <span class="stat">${dotsTotal-dotsLeft} / ${dotsTotal}</span></p>
+      <button id="nextBtn">Next Chamber →</button>`);
+    document.getElementById('nextBtn').onclick=()=>{hideOverlay();levelIndex++;buildLevel(levelIndex);state='playing';};
+  }
+  function showOverlay(h){overlay.innerHTML=h;overlay.classList.remove('hidden');}
+  function hideOverlay(){overlay.classList.add('hidden');}
+
+  // ---------- audio ----------
+  let actx;
+  function blip(f,d,type='square'){
+    try{actx=actx||new (window.AudioContext||window.webkitAudioContext)();
+      const o=actx.createOscillator(),g=actx.createGain();
+      o.type=type;o.frequency.value=f;
+      g.gain.setValueAtTime(0.06,actx.currentTime);
+      g.gain.exponentialRampToValueAtTime(0.0001,actx.currentTime+d);
+      o.connect(g);g.connect(actx.destination);o.start();o.stop(actx.currentTime+d);
+    }catch(e){}
+  }
+
+  // ---------- star drawing ----------
+  function starPath(cx,cy,outer,inner,points=5){
+    ctx.beginPath();
+    for(let i=0;i<points*2;i++){
+      const r=i%2?inner:outer;
+      const a=(Math.PI/points)*i - Math.PI/2;
+      const x=cx+Math.cos(a)*r, y=cy+Math.sin(a)*r;
+      i?ctx.lineTo(x,y):ctx.moveTo(x,y);
+    }
+    ctx.closePath();
+  }
+
+  // ---------- render ----------
+  function draw(dt){
+    anim.t+=dt;
+    const w=cols*cell, h=rows*cell;
+    ctx.clearRect(0,0,w,h);
+    for(let y=0;y<rows;y++)for(let x=0;x<cols;x++){
+      const t=grid[y][x], cx=x*cell, cy=y*cell;
+      if(t===W){
+        ctx.fillStyle='#0e1c38'; ctx.fillRect(cx,cy,cell,cell);
+        ctx.strokeStyle='rgba(47,125,240,0.85)'; ctx.lineWidth=Math.max(1,cell*0.06);
+        ctx.shadowColor='rgba(47,125,240,0.7)'; ctx.shadowBlur=cell*0.35;
+        ctx.strokeRect(cx+cell*0.12,cy+cell*0.12,cell*0.76,cell*0.76); ctx.shadowBlur=0;
+      } else if(t===DOT){
+        const p=0.5+0.5*Math.sin(anim.t/240+(x+y));
+        ctx.fillStyle='rgba(255,203,61,'+(0.6+0.35*p)+')';
+        ctx.shadowColor='rgba(255,203,61,0.8)'; ctx.shadowBlur=cell*0.25;
+        starPath(cx+cell/2,cy+cell/2,cell*0.14,cell*0.06); ctx.fill(); ctx.shadowBlur=0;
+      } else if(t===STAR){
+        const p=0.5+0.5*Math.sin(anim.t/200);
+        const rot=anim.t/900;
+        ctx.save(); ctx.translate(cx+cell/2,cy+cell/2); ctx.rotate(rot);
+        ctx.fillStyle='rgba(255,203,61,'+(0.85+0.15*p)+')';
+        ctx.shadowColor='rgba(255,203,61,0.95)'; ctx.shadowBlur=cell*0.55;
+        starPath(0,0,cell*0.34,cell*0.15); ctx.fill();
+        ctx.restore(); ctx.shadowBlur=0;
+      } else if(t===SPIKE){
+        ctx.fillStyle='#ff3b6b'; ctx.shadowColor='rgba(255,59,107,0.8)'; ctx.shadowBlur=cell*0.28;
+        const m=cell*0.18, s=cell-m*2;
+        for(let i=0;i<3;i++){const bx=cx+m+(s/3)*i;
+          ctx.beginPath();ctx.moveTo(bx,cy+cell-m);ctx.lineTo(bx+s/6,cy+m);ctx.lineTo(bx+s/3,cy+cell-m);ctx.closePath();ctx.fill();}
+        ctx.shadowBlur=0;
+      }
+    }
+    // exit gate
+    if(exitPos){
+      const ex=exitPos.x*cell, ey=exitPos.y*cell, glow=0.5+0.5*Math.sin(anim.t/200);
+      ctx.strokeStyle='rgba(177,77,255,'+(0.7+0.3*glow)+')'; ctx.lineWidth=Math.max(2,cell*0.1);
+      ctx.shadowColor='rgba(177,77,255,0.9)'; ctx.shadowBlur=cell*0.6;
+      ctx.strokeRect(ex+cell*0.16,ey+cell*0.16,cell*0.68,cell*0.68);
+      ctx.beginPath();ctx.arc(ex+cell/2,ey+cell/2,cell*0.12,0,Math.PI*2);ctx.stroke();
+      ctx.shadowBlur=0;
+    }
+    // player mask (interpolated)
+    const f=moving?Math.min(1,moveTimer/MOVE_INTERVAL):1;
+    const lerp=(a,b,t)=>a+(b-a)*t;
+    const dX=(moving?lerp(player.x-moving.dx,player.x,f):player.x)*cell;
+    const dY=(moving?lerp(player.y-moving.dy,player.y,f):player.y)*cell;
+    const pcx=dX+cell/2, pcy=dY+cell/2;
+    ctx.fillStyle='#25e0d8'; ctx.shadowColor='rgba(37,224,216,0.9)'; ctx.shadowBlur=cell*0.5;
+    ctx.beginPath();ctx.arc(pcx,pcy,cell*0.32,0,Math.PI*2);ctx.fill();ctx.shadowBlur=0;
+    ctx.fillStyle='#060911'; const eo=cell*0.12;
+    ctx.fillRect(pcx-eo-cell*0.05,pcy-cell*0.06,cell*0.1,cell*0.14);
+    ctx.fillRect(pcx+eo-cell*0.05,pcy-cell*0.06,cell*0.1,cell*0.14);
+  }
+
+  // ---------- loop ----------
+  let last=0;
+  function loop(ts){
+    const dt=Math.min(50,ts-last); last=ts;
+    if(state==='playing'&&moving){
+      moveTimer+=dt;
+      while(moveTimer>=MOVE_INTERVAL&&moving){moveTimer-=MOVE_INTERVAL;stepSlide();}
+    }
+    if(grid)draw(dt);
+    requestAnimationFrame(loop);
+  }
+
+  // ---------- input ----------
+  const keyMap={ArrowUp:[0,-1],KeyW:[0,-1],ArrowDown:[0,1],KeyS:[0,1],ArrowLeft:[-1,0],KeyA:[-1,0],ArrowRight:[1,0],KeyD:[1,0]};
+  window.addEventListener('keydown',e=>{const m=keyMap[e.code];if(m){e.preventDefault();tryStartMove(m[0],m[1]);}});
+  let touchStart=null; const stage=document.getElementById('stage');
+  stage.addEventListener('touchstart',e=>{touchStart={x:e.touches[0].clientX,y:e.touches[0].clientY};},{passive:true});
+  stage.addEventListener('touchend',e=>{
+    if(!touchStart)return;
+    const t=e.changedTouches[0], dx=t.clientX-touchStart.x, dy=t.clientY-touchStart.y;
+    if(Math.abs(dx)<18&&Math.abs(dy)<18){touchStart=null;return;}
+    if(Math.abs(dx)>Math.abs(dy))tryStartMove(Math.sign(dx),0);else tryStartMove(0,Math.sign(dy));
+    touchStart=null;
+  },{passive:true});
+
+  // ---------- boot ----------
+  startBtn.onclick=()=>{hideOverlay();levelIndex=0;buildLevel(0);state='playing';
+    footHint.textContent='Grab all 3 stars, then slide into the purple gate.';};
+  buildLevel(0); state='menu';
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>

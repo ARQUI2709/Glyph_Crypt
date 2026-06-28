@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Glyph Crypt</title>
+<link rel="stylesheet" href="/src/styles.css">
+</head>
+<body>
+<div id="app">
+  <div class="hud">
+    <div><div class="label">Chamber</div><div class="value" id="lvl">1</div></div>
+    <div class="title">Glyph Crypt</div>
+    <div style="text-align:right"><div class="label">Stars</div><div class="value gold" id="stars">0 / 3</div></div>
+  </div>
+
+  <div id="stage">
+    <canvas id="c"></canvas>
+    <div class="overlay" id="overlay"></div>
+  </div>
+
+  <div class="hint" id="footHint">Reach the gate — collect all 3 stars for a perfect run.</div>
+</div>
+<script type="module" src="/src/main.ts"></script>
+</body>
+</html>
