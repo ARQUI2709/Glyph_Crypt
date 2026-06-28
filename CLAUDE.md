@@ -93,6 +93,6 @@ dot counts), and progress save/load. The seeded RNG is what makes generation uni
 ## Deploy
 
 Pushing to `main` triggers `.github/workflows/deploy.yml` (install → test → build → deploy to
-GitHub Pages). One-time: create a repo named `glyph-crypt`, set **Settings → Pages** source to
-**GitHub Actions**. Live URL: `https://<user>.github.io/glyph-crypt/`. If the repo name
-differs, update `base` in `vite.config.ts`.
+GitHub Pages). Repo: `https://github.com/ARQUI2709/Glyph_Crypt`. One-time: set **Settings →
+Pages** source to **GitHub Actions**. Live URL: `https://arqui2709.github.io/Glyph_Crypt/`.
+The `base` in `vite.config.ts` (`/Glyph_Crypt/`) must match the repo name exactly.

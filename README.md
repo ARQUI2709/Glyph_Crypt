@@ -9,7 +9,7 @@ glowing gate. Dead-ends bite: spikes wait at the tips.
 
 ## Play
 
-Live: `https://<your-user>.github.io/glyph-crypt/`
+Live: `https://arqui2709.github.io/Glyph_Crypt/`
 
 Controls: arrow keys / WASD, or swipe on touch.
 
@@ -27,7 +27,7 @@ pnpm build        # typecheck + production build to dist/
 pnpm preview      # serve the production build locally
 ```
 
-When developing locally the production `base` is `/glyph-crypt/`; `pnpm dev` serves from `/`.
+When developing locally the production `base` is `/Glyph_Crypt/`; `pnpm dev` serves from `/`.
 
 ## Architecture
 
@@ -46,12 +46,12 @@ See [CLAUDE.md](CLAUDE.md) for the module map and design notes. In short:
 Pushing to `main` runs [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml): it
 installs, tests, builds, and publishes `dist/` to GitHub Pages.
 
-One-time setup: create a GitHub repo named **`glyph-crypt`**, then in **Settings → Pages** set
-the source to **GitHub Actions**. Push to `main` and the workflow deploys automatically.
+One-time setup: in the GitHub repo's **Settings → Pages** set the source to **GitHub
+Actions**. Push to `main` and the workflow deploys automatically.
 
 ```sh
-git remote add origin git@github.com:<your-user>/glyph-crypt.git
+git remote add origin https://github.com/ARQUI2709/Glyph_Crypt.git
 git push -u origin main
 ```
 
-If you use a different repo name, update `base` in [vite.config.ts](vite.config.ts) to match.
+The deploy `base` in [vite.config.ts](vite.config.ts) must match the repo name (`/Glyph_Crypt/`).
