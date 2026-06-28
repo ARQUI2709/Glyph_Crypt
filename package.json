@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "description": "Glyph Crypt — a neon slide-maze arcade game (browser, TypeScript).",
   "type": "module",
+  "packageManager": "pnpm@11.1.3",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
