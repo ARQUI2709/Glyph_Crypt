@@ -27,6 +27,10 @@ jobs:
         with:
           node-version: 20
           cache: pnpm
+      # Enables GitHub Pages on the repo automatically (no manual Settings step needed).
+      - uses: actions/configure-pages@v5
+        with:
+          enablement: true
       - run: pnpm install --frozen-lockfile
       - run: pnpm test
       - run: pnpm build
