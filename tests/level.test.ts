@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { buildLevel, isSolvable, STARS_PER_LEVEL, levelSize } from '../src/core/level';
+import {
+  buildLevel,
+  isSolvable,
+  STARS_PER_LEVEL,
+  levelSize,
+  unlockedHazards,
+  dynamicBudget,
+} from '../src/core/level';
 import { W, DOT, SPIKE } from '../src/core/types';
 
 describe('buildLevel', () => {
@@ -67,5 +74,36 @@ describe('buildLevel', () => {
     for (const row of lvl.grid) for (const t of row) if (t === DOT) dots++;
     expect(lvl.dotsTotal).toBe(dots);
     expect(lvl.dotsTotal).toBeGreaterThan(0);
+  });
+});
+
+describe('hazard gating + budget', () => {
+  it('introduces dynamic hazards one kind at a time, in wiki order', () => {
+    expect(unlockedHazards(0)).toEqual([]);
+    expect(unlockedHazards(1)).toEqual([]);
+    expect(unlockedHazards(2)).toEqual(['dart']);
+    expect(unlockedHazards(4)).toEqual(['dart', 'puffer']);
+    expect(unlockedHazards(6)).toEqual(['dart', 'puffer', 'saw']);
+  });
+
+  it('keeps the budget at 0 before the first mechanic and ramps with a cap', () => {
+    expect(dynamicBudget(0)).toBe(0);
+    expect(dynamicBudget(1)).toBe(0);
+    expect(dynamicBudget(2)).toBe(1);
+    expect(dynamicBudget(99)).toBeLessThanOrEqual(6);
+  });
+
+  it('only contains hazard kinds unlocked by the chamber index', () => {
+    for (let i = 0; i < 14; i++) {
+      const allowed = unlockedHazards(i);
+      for (const hz of buildLevel(i).hazards) {
+        expect(allowed).toContain(hz.kind);
+      }
+      expect(buildLevel(i).hazards.length).toBeLessThanOrEqual(dynamicBudget(i));
+    }
+  });
+
+  it('produces identical hazards for the same chamber index', () => {
+    expect(buildLevel(8).hazards).toEqual(buildLevel(8).hazards);
   });
 });

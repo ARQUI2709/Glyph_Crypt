@@ -15,6 +15,28 @@ export interface Vec {
   y: number;
 }
 
+/**
+ * Dynamic hazards — moving/cycling dangers that can't be expressed as static tiles.
+ * They live in a parallel array (not on the grid) so the grid stays pure for reachability.
+ * Their lethal cells are a pure function of a clock (see `hazardCellsAt`), so they remain
+ * deterministic and unit-testable.
+ *
+ * - `dart`  — a wall emitter fires a bolt along (dx,dy) over `length` cells, then cools down.
+ * - `puffer`— stationary; deadly only during the inflated fraction of each cycle.
+ * - `saw`   — oscillates end-to-end along a straight corridor of `length` cells.
+ */
+export type HazardKind = 'dart' | 'puffer' | 'saw';
+export interface Hazard {
+  kind: HazardKind;
+  x: number; // anchor cell (emitter / puffer body / one corridor end)
+  y: number;
+  dx: number; // travel axis (unit), 0 for puffer
+  dy: number;
+  length: number; // corridor span in cells (1 for puffer)
+  period: number; // ms for one full cycle
+  phase: number; // 0..1 seeded cycle offset
+}
+
 /** A built, playable chamber. Mutated in place during play (dots become FLOOR, etc.). */
 export interface LevelData {
   grid: Grid;
@@ -23,6 +45,7 @@ export interface LevelData {
   start: Vec;
   exit: Vec;
   stars: Vec[];
+  hazards: Hazard[];
   dotsTotal: number;
 }
 

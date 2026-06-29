@@ -46,7 +46,7 @@ const handlers: MovementHandlers = {
     game.moving = null;
     blip(140, 0.25, 'sawtooth');
     showOverlay(`<h2 style="color:var(--spike)">Impaled</h2>
-      <p>A spike caught the glyph. Dead-ends bite — slide past them, not into them.</p>
+      <p>A hazard caught the glyph. Watch the spikes, darts, puffers and saws — time your slides.</p>
       <button id="retryBtn">Retry Chamber</button>
       <button id="mapBtn">World Map</button>`);
     (document.getElementById('retryBtn') as HTMLButtonElement).onclick = () =>

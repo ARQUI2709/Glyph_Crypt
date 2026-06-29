@@ -1,6 +1,6 @@
 import type { Game } from './state';
 import type { MovementHandlers } from './movement';
-import { stepSlide } from './movement';
+import { stepSlide, checkHazards } from './movement';
 import { MOVE_INTERVAL } from './constants';
 import type { Renderer } from '../render/canvas';
 
@@ -13,12 +13,17 @@ export function startLoop(game: Game, renderer: Renderer, handlers: MovementHand
   function frame(ts: number) {
     const dt = Math.min(50, ts - last);
     last = ts;
-    if (game.state === 'playing' && game.moving) {
-      game.moveTimer += dt;
-      while (game.moveTimer >= MOVE_INTERVAL && game.moving) {
-        game.moveTimer -= MOVE_INTERVAL;
-        stepSlide(game, handlers);
+    if (game.state === 'playing') {
+      game.hazardClock += dt;
+      if (game.moving) {
+        game.moveTimer += dt;
+        while (game.moveTimer >= MOVE_INTERVAL && game.moving) {
+          game.moveTimer -= MOVE_INTERVAL;
+          stepSlide(game, handlers);
+        }
       }
+      // catch a hazard that slid onto a stationary player between moves
+      checkHazards(game, handlers);
     }
     if (game.state === 'playing') renderer.draw(game, dt);
     requestAnimationFrame(frame);

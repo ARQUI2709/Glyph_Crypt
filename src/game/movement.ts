@@ -1,5 +1,6 @@
 import type { Game } from './state';
 import { W, FLOOR, DOT, STAR, SPIKE } from '../core/types';
+import { hazardCellsAt } from '../core/hazards';
 import { blip } from '../audio/blip';
 
 export interface MovementHandlers {
@@ -52,5 +53,25 @@ export function onEnter(game: Game, h: MovementHandlers): void {
     h.onDie();
     return;
   }
+  if (checkHazards(game, h)) return;
   if (game.player.x === exit.x && game.player.y === exit.y) h.onWin();
+}
+
+/**
+ * Kill the player if their cell currently intersects any lethal hazard cell. Called both on
+ * entering a tile and every frame from the loop (so a hazard moving onto a still player also
+ * connects). Returns true if it triggered death.
+ */
+export function checkHazards(game: Game, h: MovementHandlers): boolean {
+  if (game.state !== 'playing') return false;
+  const { x, y } = game.player;
+  for (const hz of game.level.hazards) {
+    for (const c of hazardCellsAt(hz, game.hazardClock)) {
+      if (c.x === x && c.y === y) {
+        h.onDie();
+        return true;
+      }
+    }
+  }
+  return false;
 }

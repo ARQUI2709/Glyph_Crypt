@@ -1,14 +1,44 @@
-import type { Grid, LevelData, Rng, Vec } from './types';
+import type { Grid, HazardKind, LevelData, Rng, Vec } from './types';
 import { W, FLOOR, DOT, STAR, SPIKE, EXIT } from './types';
 import { mulberry32, rint, chamberSeed } from './rng';
 import { generateMaze } from './maze';
 import { slideCoverage } from './coverage';
+import { placeHazards } from './hazards';
 
 export const STARS_PER_LEVEL = 3;
 
-/** Board size scales with chamber index, matching the original bands. */
+/** Board size scales with chamber index, growing in bands and capping at 25. */
 export function levelSize(idx: number): number {
-  return idx < 3 ? 15 : idx < 6 ? 17 : 19;
+  if (idx < 3) return 15;
+  if (idx < 6) return 17;
+  if (idx < 9) return 19;
+  if (idx < 12) return 21;
+  if (idx < 16) return 23;
+  return 25;
+}
+
+/**
+ * Mechanic gating — which dynamic hazards may appear by chamber `idx`. Mirrors the wiki's
+ * "introduce one at a time, then combine" cadence (dart → puffer → saw), scaled to Glyph
+ * Crypt's chamber count. Spikes are always present (handled separately as static tiles).
+ */
+export function unlockedHazards(idx: number): HazardKind[] {
+  const kinds: HazardKind[] = [];
+  if (idx >= 2) kinds.push('dart');
+  if (idx >= 4) kinds.push('puffer');
+  if (idx >= 6) kinds.push('saw');
+  return kinds;
+}
+
+/**
+ * How many dynamic hazards to place. The debut chamber of any mechanic stays light (1); the
+ * budget then ramps with `idx` and is capped so larger boards never become unfair.
+ */
+export function dynamicBudget(idx: number): number {
+  if (idx < 2) return 0;
+  if (idx < 4) return 1; // dart debut
+  if (idx < 6) return 2; // puffer debut
+  return Math.min(6, 2 + Math.floor((idx - 6) / 2));
 }
 
 interface CovCell {
@@ -107,12 +137,20 @@ export function buildLevel(idx: number, rng: Rng = mulberry32(chamberSeed(idx)))
   const spikeCount = Math.min(tips.length, 2 + idx);
   for (let i = 0; i < spikeCount; i++) g[tips[i].y][tips[i].x] = SPIKE;
 
+  // dynamic hazards: placed on straight corridors, gated + budgeted by chamber index, and
+  // kept off the start, exit, stars and existing static spikes.
+  const reserved: Vec[] = [{ x: 1, y: 1 }, exit, ...stars];
+  for (let y = 0; y < rows; y++) {
+    for (let x = 0; x < cols; x++) if (g[y][x] === SPIKE) reserved.push({ x, y });
+  }
+  const hazards = placeHazards(g, rng, unlockedHazards(idx), dynamicBudget(idx), reserved);
+
   let dotsTotal = 0;
   for (let y = 0; y < rows; y++) {
     for (let x = 0; x < cols; x++) if (g[y][x] === DOT) dotsTotal++;
   }
 
-  return { grid: g, rows, cols, start: { x: 1, y: 1 }, exit, stars, dotsTotal };
+  return { grid: g, rows, cols, start: { x: 1, y: 1 }, exit, stars, hazards, dotsTotal };
 }
 
 /**

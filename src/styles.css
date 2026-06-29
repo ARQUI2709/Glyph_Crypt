@@ -5,7 +5,8 @@
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{height:100%;background:var(--bg);color:var(--ink);
   font-family:'Courier New',monospace;overflow:hidden;user-select:none;-webkit-user-select:none;touch-action:none}
-#app{height:100dvh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:12px}
+#app{height:100dvh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;
+  padding:calc(12px + env(safe-area-inset-top)) calc(12px + env(safe-area-inset-right)) calc(12px + env(safe-area-inset-bottom)) calc(12px + env(safe-area-inset-left))}
 .hud{width:min(92vmin,560px);display:flex;justify-content:space-between;align-items:flex-end;letter-spacing:1px}
 .hud .label{font-size:11px;opacity:.55;text-transform:uppercase}
 .hud .value{font-size:22px;font-weight:bold;color:var(--neon);text-shadow:0 0 12px rgba(37,224,216,.6)}

@@ -1,5 +1,6 @@
 import type { GameState, LevelData, Vec } from '../core/types';
 import { buildLevel, STARS_PER_LEVEL } from '../core/level';
+import { themeForChamber, type Theme } from '../render/theme';
 
 /** Mutable runtime for an in-progress run. Mirrors the original module-level globals. */
 export interface Game {
@@ -13,6 +14,8 @@ export interface Game {
   state: GameState;
   cell: number; // pixel size of one cell, set by the renderer's resize()
   anim: { t: number };
+  hazardClock: number; // ms accumulator driving dynamic-hazard positions
+  theme: Theme; // per-chamber palette/texture, rotated by themeForChamber
 }
 
 /** Load a chamber into the runtime (fresh deterministic layout for `idx`). */
@@ -25,6 +28,8 @@ export function loadChamber(game: Game, idx: number): void {
   game.dotsLeft = game.level.dotsTotal;
   game.starsGot = 0;
   game.anim.t = game.anim.t || 0;
+  game.hazardClock = 0;
+  game.theme = themeForChamber(idx);
 }
 
 export function createGame(idx = 0): Game {
@@ -39,6 +44,8 @@ export function createGame(idx = 0): Game {
     state: 'menu',
     cell: 0,
     anim: { t: 0 },
+    hazardClock: 0,
+    theme: themeForChamber(idx),
   };
   loadChamber(game, idx);
   game.state = 'menu';
