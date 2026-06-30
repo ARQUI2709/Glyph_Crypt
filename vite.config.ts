@@ -30,6 +30,10 @@ export default defineConfig({
       workbox: {
         // Precache the whole built app so it plays fully offline once installed.
         globPatterns: ['**/*.{js,css,html,svg,png,ico,woff2}'],
+        // icon-source.png is the 2.86 MB artwork master the icon generator reads; it ships in
+        // public/ but is never referenced at runtime, so skip it (it also exceeds the 2 MiB
+        // precache limit and would otherwise fail the build).
+        globIgnores: ['**/icon-source.png'],
       },
     }),
   ],
