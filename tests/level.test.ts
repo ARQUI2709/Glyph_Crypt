@@ -211,6 +211,14 @@ describe('hazard gating + budget', () => {
     }
   });
 
+  it('actually spawns puffers once unlocked (budget is shared, not all eaten by moving hazards)', () => {
+    let puffers = 0;
+    for (let i = 4; i < 14; i++) {
+      puffers += buildLevel(i).hazards.filter((h) => h.kind === 'puffer').length;
+    }
+    expect(puffers).toBeGreaterThan(0);
+  });
+
   it('produces identical hazards for the same chamber index', () => {
     expect(buildLevel(8).hazards).toEqual(buildLevel(8).hazards);
   });

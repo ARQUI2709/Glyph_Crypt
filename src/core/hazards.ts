@@ -4,33 +4,46 @@ import { rint } from './rng';
 
 // Tuning for the lethal duty-cycle of each hazard kind. All timing is in milliseconds and is
 // resolved at runtime from a single clock, so positions never drift between frames.
-const DART_PERIOD = 1500;
-const DART_TRAVEL = 0.55; // fraction of the cycle the bolt is in flight (else cooling down)
-const PUFFER_PERIOD = 1700;
-const PUFFER_INFLATED = 0.45; // fraction of the cycle the puffer is inflated (deadly)
-const SAW_PERIOD = 2000;
+//
+// Each cycle is split into telegraphed sub-phases. The LETHAL window is a strict subset of the
+// visible animation: a dart bursts (visual) AFTER its flight, a puffer swells (visual) BEFORE it
+// is deadly and collapses (visual) after — so what kills you is always something you saw coming.
+export const DART_PERIOD = 1500;
+export const DART_TRAVEL = 0.5; // fraction of the cycle the bolt is in flight (lethal)
+export const DART_BURST = 0.16; // fraction after flight showing the wall impact (visual only)
+export const PUFFER_PERIOD = 1700;
+export const PUFFER_EXPAND = 0.18; // gas swelling out from the origin (telegraph, not yet deadly)
+export const PUFFER_HOLD = 0.5; // end of the fully-inflated deadly hold; lethal in [EXPAND, HOLD)
+export const PUFFER_RETRACT = 0.66; // gas collapsing back in (visual only)
+export const SAW_PERIOD = 2000;
 
 /** Wrapped cycle progress in [0,1) for a hazard at clock `t`. */
-function progress(h: Hazard, t: number): number {
+export function hazardPhase(h: Hazard, t: number): number {
   const p = t / h.period + h.phase;
   return p - Math.floor(p);
+}
+
+/** A puffer's lethal footprint: its precomputed open 3×3 cells, or just its origin as a fallback. */
+function pufferCells(h: Hazard): Vec[] {
+  return h.cells ?? [{ x: h.x, y: h.y }];
 }
 
 /**
  * The cells that are LETHAL right now, as a pure function of the clock `t`. Empty while a
  * hazard is in its safe phase (dart cooling down, puffer deflated). This is the single source
- * of truth shared by movement (collision) and the renderer.
+ * of truth shared by movement (collision) and the renderer. Positions are cell-quantized; the
+ * renderer interpolates between them for smooth motion (see `dartRender`/`sawRender`).
  */
 export function hazardCellsAt(h: Hazard, t: number): Vec[] {
-  const p = progress(h, t);
+  const p = hazardPhase(h, t);
   switch (h.kind) {
     case 'dart': {
-      if (p >= DART_TRAVEL) return []; // cooldown — no bolt on the board
+      if (p >= DART_TRAVEL) return []; // burst/cooldown — no bolt to collide with
       const step = Math.min(h.length - 1, Math.floor((p / DART_TRAVEL) * h.length));
       return [{ x: h.x + h.dx * step, y: h.y + h.dy * step }];
     }
     case 'puffer':
-      return p < PUFFER_INFLATED ? [{ x: h.x, y: h.y }] : [];
+      return isPufferInflated(h, t) ? pufferCells(h) : [];
     case 'saw': {
       const tri = p < 0.5 ? p * 2 : (1 - p) * 2; // 0→1→0 triangle wave
       const step = Math.round(tri * (h.length - 1));
@@ -39,9 +52,56 @@ export function hazardCellsAt(h: Hazard, t: number): Vec[] {
   }
 }
 
-/** True if the puffer is currently inflated (deadly). Convenience for the renderer. */
+/** True only during the puffer's fully-inflated, deadly hold (not while swelling/collapsing). */
 export function isPufferInflated(h: Hazard, t: number): boolean {
-  return progress(h, t) < PUFFER_INFLATED;
+  const p = hazardPhase(h, t);
+  return p >= PUFFER_EXPAND && p < PUFFER_HOLD;
+}
+
+/** Continuous bolt geometry for smooth dart rendering (lethal cells still come from `hazardCellsAt`). */
+export interface DartRender {
+  stage: 'flight' | 'burst' | 'idle';
+  dist: number; // continuous distance from the box along (dx,dy), in cells (0 → length at the wall)
+  burst: number; // 0→1 impact-flash progress while `stage === 'burst'`
+}
+export function dartRender(h: Hazard, t: number): DartRender {
+  const p = hazardPhase(h, t);
+  // The far wall FACE, measured in cells from the origin: the last open cell is index length-1,
+  // so its outer edge (touching the wall) is at length-0.5. The bolt flies up to there and the
+  // burst sits exactly against the wall (never centred inside it, never a cell short). Clamping
+  // keeps the visible head from ever lagging its lethal cell (which is always ≥ floor(p·length)).
+  const wall = h.length - 0.5;
+  if (p < DART_TRAVEL) {
+    return { stage: 'flight', dist: Math.min((p / DART_TRAVEL) * h.length, wall), burst: 0 };
+  }
+  if (p < DART_TRAVEL + DART_BURST) {
+    return { stage: 'burst', dist: wall, burst: (p - DART_TRAVEL) / DART_BURST };
+  }
+  return { stage: 'idle', dist: 0, burst: 0 };
+}
+
+/** Continuous swell for smooth puffer rendering. `scale` 0→1 grows the 3×3 gas; `lethal` mirrors
+ *  the inflated hold. Expand and retract are telegraph/cooldown — visible but harmless. */
+export interface PufferRender {
+  scale: number;
+  lethal: boolean;
+}
+export function pufferRender(h: Hazard, t: number): PufferRender {
+  const p = hazardPhase(h, t);
+  if (p < PUFFER_EXPAND) return { scale: p / PUFFER_EXPAND, lethal: false };
+  if (p < PUFFER_HOLD) return { scale: 1, lethal: true };
+  if (p < PUFFER_RETRACT) return { scale: 1 - (p - PUFFER_HOLD) / (PUFFER_RETRACT - PUFFER_HOLD), lethal: false };
+  return { scale: 0, lethal: false };
+}
+
+/** Continuous blade position for smooth saw rendering: a triangle wave sliding wall to wall.
+ *  A small overshoot at each extreme lets the blade visibly kiss the wall borders it bounces off
+ *  (visual only — the lethal end cells from `hazardCellsAt` stay within [0, length-1]). */
+const SAW_OVERSHOOT = 0.2; // cells the blade dips into each wall at the turnaround
+export function sawRender(h: Hazard, t: number): { dist: number } {
+  const p = hazardPhase(h, t);
+  const tri = p < 0.5 ? p * 2 : (1 - p) * 2;
+  return { dist: -SAW_OVERSHOOT + tri * (h.length - 1 + 2 * SAW_OVERSHOOT) };
 }
 
 /** Ms the player spends crossing one cell while sliding. Mirrors game `MOVE_INTERVAL`
@@ -50,7 +110,7 @@ const CROSS_MS = 40;
 
 /** Every cell a hazard could EVER be lethal on, ignoring timing (its spatial footprint). */
 function footprint(h: Hazard): Vec[] {
-  if (h.kind === 'puffer') return [{ x: h.x, y: h.y }];
+  if (h.kind === 'puffer') return h.cells ?? [{ x: h.x, y: h.y }];
   const out: Vec[] = [];
   for (let i = 0; i < h.length; i++) out.push({ x: h.x + h.dx * i, y: h.y + h.dy * i });
   return out;
@@ -237,6 +297,40 @@ export function placeHazards(
   const taken: Vec[] = [...reserved];
   const blocked = (cells: Vec[]) => cells.some((c) => inPlace(taken, c));
 
+  // Reserve a share of the budget for stationary puffers so the moving-hazard pass below can't
+  // greedily consume every slot — otherwise puffers (placed last) never spawn at all. Any reserved
+  // slots that puffers can't fill are handed back to the moving pass, which is capped at full budget.
+  const pufferCap = kinds.includes('puffer') ? Math.min(budget, Math.max(1, Math.round(budget / 3))) : 0;
+
+  // --- stationary puffers: interior of any straight run (exempt from rule 3) ---
+  // A puffer swells from its origin into a 3×3 box of gas, so its lethal footprint is the OPEN
+  // cells of that 3×3 (walls clip it). We claim the whole footprint so the gas never overlaps a
+  // reserved/already-taken cell; pruneForRoute later drops any whose gas would block a route stop.
+  if (pufferCap > 0) {
+    const open = (x: number, y: number) => grid[y]?.[x] !== undefined && grid[y][x] !== W;
+    const runs = straightRuns(grid);
+    for (let i = runs.length - 1; i > 0; i--) {
+      const j = rint(rng, i + 1);
+      [runs[i], runs[j]] = [runs[j], runs[i]];
+    }
+    for (const run of runs) {
+      if (hazards.length >= pufferCap) break;
+      if (run.length - 2 < 1) continue;
+      const mid = Math.floor(run.length / 2); // an interior index (1..run.length-2)
+      const cx = run.x + run.dx * mid;
+      const cy = run.y + run.dy * mid;
+      const cells: Vec[] = [];
+      for (let oy = -1; oy <= 1; oy++) {
+        for (let ox = -1; ox <= 1; ox++) {
+          if (open(cx + ox, cy + oy)) cells.push({ x: cx + ox, y: cy + oy });
+        }
+      }
+      if (blocked(cells)) continue;
+      taken.push(...cells);
+      hazards.push({ kind: 'puffer', x: cx, y: cy, dx: 0, dy: 0, length: 1, period: PUFFER_PERIOD, phase: rng(), cells });
+    }
+  }
+
   // --- moving hazards: perpendicular crossings of the route (rule 3) ---
   const movingKinds = kinds.filter((k) => k !== 'puffer');
   if (route && movingKinds.length) {
@@ -268,17 +362,21 @@ export function placeHazards(
     }
     for (const run of crossings) {
       if (hazards.length >= budget) break;
-      const inLen = run.length - 2; // interior length (drop the two turn-stop ends)
+      const inLen = run.length - 2; // interior length, used only to size-gate saws below
       if (inLen < 1) continue;
       // saws are always lethal somewhere on their span, so they need ≥2 interior cells to leave a
-      // gap to slip through; darts work on a single interior cell.
+      // gap to slip through; darts only threaten during their flight (then cool down).
       const fit = movingKinds.filter((kk) => kk !== 'saw' || inLen >= 2);
       if (fit.length === 0) continue;
       const kind = fit[rint(rng, fit.length)];
-      const ax = run.x + run.dx;
-      const ay = run.y + run.dy;
+      // Both kinds sweep the FULL corridor, wall to wall (span includes the two end cells against
+      // the walls): a saw bounces end to end; a dart fires from the wall behind it and bursts
+      // against the far wall, with its emitter embedded in the near wall.
+      const len = run.length;
+      const ax = run.x;
+      const ay = run.y;
       const cells: Vec[] = [];
-      for (let i = 0; i < inLen; i++) cells.push({ x: ax + run.dx * i, y: ay + run.dy * i });
+      for (let i = 0; i < len; i++) cells.push({ x: ax + run.dx * i, y: ay + run.dy * i });
       if (blocked(cells)) continue;
       taken.push(...cells);
       hazards.push({
@@ -287,28 +385,10 @@ export function placeHazards(
         y: ay,
         dx: run.dx,
         dy: run.dy,
-        length: inLen,
-        period: kind === 'dart' ? DART_PERIOD : SAW_PERIOD,
+        length: len,
+        period: kind === 'saw' ? SAW_PERIOD : DART_PERIOD,
         phase: rng(),
       });
-    }
-  }
-
-  // --- stationary puffers: interior of any straight run (exempt from rule 3) ---
-  if (kinds.includes('puffer') && hazards.length < budget) {
-    const runs = straightRuns(grid);
-    for (let i = runs.length - 1; i > 0; i--) {
-      const j = rint(rng, i + 1);
-      [runs[i], runs[j]] = [runs[j], runs[i]];
-    }
-    for (const run of runs) {
-      if (hazards.length >= budget) break;
-      if (run.length - 2 < 1) continue;
-      const mid = Math.floor(run.length / 2); // an interior index (1..run.length-2)
-      const cell: Vec = { x: run.x + run.dx * mid, y: run.y + run.dy * mid };
-      if (inPlace(taken, cell)) continue;
-      taken.push(cell);
-      hazards.push({ kind: 'puffer', x: cell.x, y: cell.y, dx: 0, dy: 0, length: 1, period: PUFFER_PERIOD, phase: rng() });
     }
   }
 

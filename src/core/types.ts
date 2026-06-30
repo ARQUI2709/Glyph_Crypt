@@ -21,9 +21,11 @@ export interface Vec {
  * Their lethal cells are a pure function of a clock (see `hazardCellsAt`), so they remain
  * deterministic and unit-testable.
  *
- * - `dart`  — a wall emitter fires a bolt along (dx,dy) over `length` cells, then cools down.
- * - `puffer`— stationary; deadly only during the inflated fraction of each cycle.
- * - `saw`   — oscillates end-to-end along a straight corridor of `length` cells.
+ * - `dart`  — a wall box fires a bolt that flies along (dx,dy) over `length` cells and bursts on
+ *             the far wall, then cools down before re-launching.
+ * - `puffer`— stationary; swells out from its origin to fill a 3×3 box of gas (`cells`), deadly
+ *             only while fully inflated.
+ * - `saw`   — slides end-to-end and back, wall to wall, along a straight corridor of `length`.
  */
 export type HazardKind = 'dart' | 'puffer' | 'saw';
 export interface Hazard {
@@ -35,6 +37,7 @@ export interface Hazard {
   length: number; // corridor span in cells (1 for puffer)
   period: number; // ms for one full cycle
   phase: number; // 0..1 seeded cycle offset
+  cells?: Vec[]; // puffer: the open cells of its 3×3 footprint (lethal when inflated)
 }
 
 /**

@@ -3,7 +3,7 @@ import type { Hazard, SpikeFace } from '../core/types';
 import { W, DOT, STAR } from '../core/types';
 import { MOVE_INTERVAL, CELL_SIZE, CAMERA_LOOKAHEAD } from '../game/constants';
 import type { Theme } from './theme';
-import { hazardCellsAt, isPufferInflated } from '../core/hazards';
+import { dartRender, pufferRender, sawRender } from '../core/hazards';
 import { starPath } from './stars';
 
 export class Renderer {
@@ -173,16 +173,16 @@ export class Renderer {
     const cx = (s.x + 0.5) * cell;
     const cy = (s.y + 0.5) * cell;
     // Boundary midpoint between the open cell and the spiked wall, and the edge's tangent.
-    const bx = cx + s.dx * cell * 0.5;
-    const by = cy + s.dy * cell * 0.5;
+    const bx = cx + s.dx * cell * 0.55;
+    const by = cy + s.dy * cell * 0.55;
     const tx = -s.dy; // tangent (along the shared edge)
     const ty = s.dx;
-    const depth = cell * 0.34; // how far the spikes jut into the cell
+    const depth = cell * 0.1; // how far the spikes jut into the cell (0.3× the old 0.34)
     const half = cell * 0.5;
     ctx.fillStyle = theme.spike;
     ctx.shadowColor = theme.spikeGlow;
     ctx.shadowBlur = cell * 0.28;
-    const teeth = 3;
+    const teeth = 6;
     for (let i = 0; i < teeth; i++) {
       const a = -half + (cell / teeth) * i;
       const b = a + cell / teeth;
@@ -222,51 +222,189 @@ export class Renderer {
     ctx.shadowBlur = 0;
   }
 
-  /** Draw a dynamic hazard at its current lethal/passive position. */
+  /** Draw a dynamic hazard, interpolating its motion for smooth animation. */
   private drawHazard(theme: Theme, hz: Hazard, clock: number, anim: number, cell: number): void {
+    if (hz.kind === 'puffer') this.drawPuffer(theme, hz, clock, cell);
+    else if (hz.kind === 'dart') this.drawDart(theme, hz, clock, cell);
+    else this.drawSaw(theme, hz, clock, anim, cell);
+  }
+
+  /** Puffer: a dormant bomb sitting on its centre cell that swells gas out to fill its open 3×3,
+   *  then collapses. The bomb is always drawn so the player can see (and walk over) it while it is
+   *  deflated; the gas is what becomes lethal during the inflated hold. */
+  private drawPuffer(theme: Theme, hz: Hazard, clock: number, cell: number): void {
     const ctx = this.ctx;
-    if (hz.kind === 'puffer') {
-      const inflated = isPufferInflated(hz, clock);
-      const px = hz.x * cell + cell / 2;
-      const py = hz.y * cell + cell / 2;
-      const r = inflated ? cell * 0.4 : cell * 0.22;
-      ctx.fillStyle = inflated ? theme.spike : theme.wallFace;
+    const { scale, lethal } = pufferRender(hz, clock);
+    const cells = hz.cells ?? [{ x: hz.x, y: hz.y }];
+    // --- gas cloud (only while swelling/inflated) ---
+    if (scale > 0) {
+      ctx.save();
+      ctx.fillStyle = lethal ? theme.spike : theme.wallFace;
       ctx.strokeStyle = theme.spike;
       ctx.lineWidth = Math.max(1, cell * 0.05);
       ctx.shadowColor = theme.spikeGlow;
-      ctx.shadowBlur = inflated ? cell * 0.4 : cell * 0.12;
-      ctx.beginPath();
-      ctx.arc(px, py, r, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.stroke();
+      ctx.shadowBlur = lethal ? cell * 0.45 : cell * 0.18;
+      ctx.globalAlpha = lethal ? 1 : 0.6;
+      for (const c of cells) {
+        // each cell reveals from the centre outward, so the gas visibly grows ring by ring
+        const ring = Math.max(Math.abs(c.x - hz.x), Math.abs(c.y - hz.y)); // 0 (centre) or 1
+        const reveal = Math.max(0, Math.min(1, scale * 2 - ring));
+        if (reveal <= 0) continue;
+        const r = cell * 0.5 * reveal;
+        const px = c.x * cell + cell / 2;
+        const py = c.y * cell + cell / 2;
+        ctx.beginPath();
+        ctx.arc(px, py, r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
       ctx.shadowBlur = 0;
-      return;
     }
-    const cells = hazardCellsAt(hz, clock);
-    if (cells.length === 0) return; // dart cooling down — nothing lethal on board
-    const c = cells[0];
-    const px = c.x * cell + cell / 2;
-    const py = c.y * cell + cell / 2;
-    if (hz.kind === 'dart') {
-      ctx.fillStyle = theme.spike;
+    // --- the bomb itself, always on the centre cell (a passable marker while deflated) ---
+    this.drawBomb(theme, hz.x, hz.y, cell, lethal);
+  }
+
+  /** A small bomb on the puffer's centre cell: a round body with a stubby fuse. Drawn hollow/dim
+   *  while dormant (the cell is walkable then) and lit red once its gas is lethal. */
+  private drawBomb(theme: Theme, gx: number, gy: number, cell: number, lethal: boolean): void {
+    const ctx = this.ctx;
+    const px = gx * cell + cell / 2;
+    const py = gy * cell + cell * 0.56;
+    const r = cell * 0.24;
+    ctx.save();
+    ctx.lineWidth = Math.max(1, cell * 0.06);
+    ctx.strokeStyle = theme.spike;
+    ctx.fillStyle = lethal ? theme.spike : theme.ink;
+    ctx.shadowColor = theme.spikeGlow;
+    ctx.shadowBlur = lethal ? cell * 0.4 : cell * 0.15;
+    ctx.globalAlpha = lethal ? 1 : 0.75;
+    // body
+    ctx.beginPath();
+    ctx.arc(px, py, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    // fuse: a short curl rising from the top of the body
+    ctx.beginPath();
+    ctx.moveTo(px + r * 0.4, py - r * 0.85);
+    ctx.quadraticCurveTo(px + r * 1.2, py - r * 1.4, px + r * 0.6, py - r * 1.9);
+    ctx.stroke();
+    // spark at the fuse tip
+    ctx.fillStyle = lethal ? theme.gold : theme.spike;
+    ctx.beginPath();
+    ctx.arc(px + r * 0.6, py - r * 1.9, cell * 0.05, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+    ctx.shadowBlur = 0;
+  }
+
+  /** Dart: a wall box fires a bolt that flies continuously and bursts on the far wall. */
+  private drawDart(theme: Theme, hz: Hazard, clock: number, cell: number): void {
+    const ctx = this.ctx;
+    const { stage, dist, burst } = dartRender(hz, clock);
+    // Emitter box, embedded INSIDE the wall cell directly behind the bolt's path (the origin is
+    // the run's first cell, so the wall sits one cell back along -dir), with a muzzle aperture
+    // facing the corridor it fires into — always visible. The bolt emerges from here and bursts
+    // against the far wall.
+    const bx = (hz.x - hz.dx) * cell + cell / 2;
+    const by = (hz.y - hz.dy) * cell + cell / 2;
+    const bs = cell * 0.4;
+    ctx.fillStyle = theme.wallFace;
+    ctx.strokeStyle = theme.spike;
+    ctx.lineWidth = Math.max(1, cell * 0.06);
+    ctx.shadowColor = theme.spikeGlow;
+    ctx.shadowBlur = stage === 'idle' ? cell * 0.1 : cell * 0.25;
+    ctx.beginPath();
+    ctx.rect(bx - bs / 2, by - bs / 2, bs, bs);
+    ctx.fill();
+    ctx.stroke();
+    // muzzle: a bright slot straddling the box face that points down the firing direction
+    // (glows while a bolt is in flight). `mw` across the barrel, `mt` its thickness.
+    const mw = cell * 0.15;
+    const mt = cell * 0.12;
+    const fx = bx + hz.dx * (bs / 2 - cell * 0.04);
+    const fy = by + hz.dy * (bs / 2 - cell * 0.04);
+    const halfW = Math.abs(hz.dx) * (mt / 2) + Math.abs(hz.dy) * mw;
+    const halfH = Math.abs(hz.dy) * (mt / 2) + Math.abs(hz.dx) * mw;
+    ctx.fillStyle = theme.spike;
+    ctx.shadowColor = theme.spikeGlow;
+    ctx.shadowBlur = stage === 'flight' ? cell * 0.35 : 0;
+    ctx.beginPath();
+    ctx.rect(fx - halfW, fy - halfH, halfW * 2, halfH * 2);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    if (stage === 'idle') return;
+
+    // bolt head position interpolated along the flight axis (origin cell centre + dist cells)
+    const px = (hz.x + hz.dx * dist) * cell + cell / 2;
+    const py = (hz.y + hz.dy * dist) * cell + cell / 2;
+    const tx = hz.dx;
+    const ty = hz.dy;
+    const nx = -ty;
+    const ny = tx;
+    if (stage === 'flight') {
+      // Draw as a comet: a streak whose tail reaches back to the emitter mouth (so the bolt
+      // visibly leaves the box) and a pointed head at the leading lethal position.
+      const ex = (hz.x - hz.dx) * cell + cell / 2; // emitter cell centre (in the wall)
+      const ey = (hz.y - hz.dy) * cell + cell / 2;
+      ctx.save();
+      ctx.strokeStyle = theme.spike;
+      ctx.lineCap = 'round';
+      ctx.lineWidth = cell * 0.16;
       ctx.shadowColor = theme.spikeGlow;
       ctx.shadowBlur = cell * 0.3;
+      // tail: from the emitter up to a little behind the head (capped so it stays a streak)
+      const back = cell * 0.7;
+      const txEnd = px - tx * back;
+      const tyEnd = py - ty * back;
+      // start the streak from whichever is nearer the head: the emitter, or the capped tail
+      const fromEmitter = Math.abs((px - ex) * tx + (py - ey) * ty) <= back;
       ctx.beginPath();
-      ctx.arc(px, py, cell * 0.16, 0, Math.PI * 2);
+      ctx.moveTo(fromEmitter ? ex : txEnd, fromEmitter ? ey : tyEnd);
+      ctx.lineTo(px, py);
+      ctx.stroke();
+      // pointed arrowhead at the head
+      ctx.fillStyle = theme.spike;
+      const along = cell * 0.2;
+      const wide = cell * 0.13;
+      ctx.beginPath();
+      ctx.moveTo(px + tx * along, py + ty * along);
+      ctx.lineTo(px + nx * wide, py + ny * wide);
+      ctx.lineTo(px - nx * wide, py - ny * wide);
+      ctx.closePath();
       ctx.fill();
+      ctx.restore();
       ctx.shadowBlur = 0;
     } else {
-      // saw — spinning blade
+      // burst flash against the wall the bolt slammed into (centred on the wall face)
+      const r = cell * (0.18 + 0.32 * burst);
       ctx.save();
-      ctx.translate(px, py);
-      ctx.rotate(anim / 120);
+      ctx.globalAlpha = 1 - burst;
       ctx.fillStyle = theme.spike;
       ctx.shadowColor = theme.spikeGlow;
-      ctx.shadowBlur = cell * 0.35;
-      starPath(ctx, 0, 0, cell * 0.38, cell * 0.24);
+      ctx.shadowBlur = cell * 0.5;
+      ctx.beginPath();
+      ctx.arc(px, py, r, 0, Math.PI * 2);
       ctx.fill();
       ctx.restore();
       ctx.shadowBlur = 0;
     }
+  }
+
+  /** Saw: a spinning blade sliding smoothly end-to-end and back, wall to wall. */
+  private drawSaw(theme: Theme, hz: Hazard, clock: number, anim: number, cell: number): void {
+    const ctx = this.ctx;
+    const { dist } = sawRender(hz, clock);
+    const px = (hz.x + hz.dx * dist) * cell + cell / 2;
+    const py = (hz.y + hz.dy * dist) * cell + cell / 2;
+    ctx.save();
+    ctx.translate(px, py);
+    ctx.rotate(anim / 120);
+    ctx.fillStyle = theme.spike;
+    ctx.shadowColor = theme.spikeGlow;
+    ctx.shadowBlur = cell * 0.35;
+    starPath(ctx, 0, 0, cell * 0.42, cell * 0.24);
+    ctx.fill();
+    ctx.restore();
+    ctx.shadowBlur = 0;
   }
 }

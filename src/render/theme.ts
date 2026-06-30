@@ -27,9 +27,13 @@ export interface Theme {
   texture: WallTexture;
 }
 
-// Collectible/hazard/exit colors stay constant across zones for readability; only the wall +
-// player neon family shifts, so the game still reads at a glance.
+// Collectible/hazard/exit colors stay constant across zones for readability; the **wall family is
+// also fixed (always blue)** so the crypt walls read the same in every chamber. Only the background
+// and player-neon family shift per zone.
 const SHARED = {
+  wallFace: '#0e1c38',
+  wallGlow: 'rgba(47,125,240,0.85)',
+  wallGlowSoft: 'rgba(47,125,240,0.7)',
   gold: '#ffcb3d',
   goldGlowStrong: 'rgba(255,203,61,0.95)',
   goldGlow: 'rgba(255,203,61,0.8)',
@@ -40,37 +44,29 @@ const SHARED = {
   ink: '#060911',
 } as const;
 
-/** Neon palettes rotated one per 5 chambers. Index 0 mirrors the CSS `:root`. */
+/**
+ * Per-zone palettes rotated one per 5 chambers. Index 0 mirrors the CSS `:root`. The wall family
+ * is **not** part of this — walls are always blue (see `SHARED`); only the background and player
+ * neon shift per zone.
+ */
 const palettes = [
   {
     bg: '#060911',
-    wallFace: '#0e1c38',
-    wallGlow: 'rgba(47,125,240,0.85)',
-    wallGlowSoft: 'rgba(47,125,240,0.7)',
     neon: '#25e0d8',
     neonGlow: 'rgba(37,224,216,0.9)',
   },
   {
     bg: '#0a0713',
-    wallFace: '#2a1340',
-    wallGlow: 'rgba(177,77,255,0.85)',
-    wallGlowSoft: 'rgba(177,77,255,0.7)',
     neon: '#ff7be0',
     neonGlow: 'rgba(255,123,224,0.9)',
   },
   {
     bg: '#04110d',
-    wallFace: '#0c2e22',
-    wallGlow: 'rgba(46,240,160,0.85)',
-    wallGlowSoft: 'rgba(46,240,160,0.7)',
     neon: '#7dffb0',
     neonGlow: 'rgba(125,255,176,0.9)',
   },
   {
     bg: '#12080a',
-    wallFace: '#3a161f',
-    wallGlow: 'rgba(255,120,80,0.85)',
-    wallGlowSoft: 'rgba(255,120,80,0.7)',
     neon: '#ffd36b',
     neonGlow: 'rgba(255,211,107,0.9)',
   },

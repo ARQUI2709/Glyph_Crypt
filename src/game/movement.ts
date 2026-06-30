@@ -1,6 +1,5 @@
 import type { Game } from './state';
 import { W, FLOOR, DOT, STAR } from '../core/types';
-import { STARS_PER_LEVEL } from './constants';
 import { hazardCellsAt } from '../core/hazards';
 import { blip } from '../audio/blip';
 
@@ -68,12 +67,8 @@ export function onEnter(game: Game, h: MovementHandlers): void {
     blip(990, 0.12);
   }
   if (checkHazards(game, h)) return;
-  // The gate only opens once all 3 stars are collected ("grab all 3 stars, then the gate").
-  if (
-    game.player.x === exit.x &&
-    game.player.y === exit.y &&
-    game.starsGot >= STARS_PER_LEVEL
-  ) {
+  // Reaching the exit always wins — stars are an optional bonus, not a gate.
+  if (game.player.x === exit.x && game.player.y === exit.y) {
     h.onWin();
   }
 }

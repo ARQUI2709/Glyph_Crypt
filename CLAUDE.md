@@ -78,14 +78,23 @@ ES modules under `src/`, in dependency order. The runtime is wired in `src/main.
   `dynamicBudget(idx)` caps the count.
 - **`hazards.ts`** — dynamic hazards as a parallel array on `LevelData`. `hazardCellsAt(h, t)`
   returns the **lethal cells as a pure function of a clock** `t` (the single source shared by
-  collision + rendering). `placeHazards(..., route)` places **moving** hazards (dart/saw)
+  collision + rendering — cell-quantized so collision matches the gates). Each kind cycles through
+  telegraphed sub-phases where the **lethal window is a strict subset of the visible animation**: a
+  **dart** fires from a wall box, flies the corridor and **bursts on the far wall** (lethal only in
+  flight); a **puffer** **swells from its origin into its open 3×3 footprint** (`Hazard.cells`,
+  precomputed at placement) and is deadly only during the fully-inflated hold (the swell/collapse are
+  telegraph); a **saw** slides **wall to wall and back**. `dartRender`/`pufferRender`/`sawRender` are
+  pure helpers giving the renderer **continuous interpolated** geometry between the quantized lethal
+  cells. `placeHazards(..., route)` places **moving** hazards (dart/saw)
   **perpendicular to the route** (rule 3): `routeAxisMap` records each route cell's slide axis,
   and a dart/saw is mounted on a perpendicular straight run that the route only ever *crosses*
   (never travels along), so it sweeps across the path rather than block it. Stationary **puffers**
-  (exempt) sit on the interior of straight runs. All anchor on a run's **interior** (never the
-  turn-stops where the player rests). `pruneForRoute(...)` then drops any hazard that threatens a
-  route stop or makes a route segment un-crossable — so a hazard is **never the sole blocker** and
-  the clear-walk is always timing-passable.
+  (exempt) sit on the interior of straight runs (claiming their whole 3×3 of gas) and are placed
+  **first against a reserved budget share** (`~budget/3`, min 1) so the moving-hazard pass can't
+  greedily eat every slot and starve them — unfilled puffer slots fall back to moving hazards. All
+  anchor on a run's **interior** (never the turn-stops where the player rests). `pruneForRoute(...)` then drops
+  any hazard whose footprint threatens a route stop or makes a route segment un-crossable — so a
+  hazard is **never the sole blocker** and the clear-walk is always timing-passable.
 
 ### `src/game` — runtime
 - **`state.ts`** — `Game` runtime object + `createGame` / `loadChamber`. Per chamber it also

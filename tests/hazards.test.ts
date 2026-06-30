@@ -33,11 +33,22 @@ describe('hazardCellsAt', () => {
     expect(hazardCellsAt(dart, dart.period * 0.95).length).toBe(0); // cooldown
   });
 
-  it('puffer toggles deadly with isPufferInflated', () => {
-    expect(isPufferInflated(puffer, 0)).toBe(true);
-    expect(hazardCellsAt(puffer, 0)).toEqual([{ x: 3, y: 3 }]);
-    expect(isPufferInflated(puffer, puffer.period * 0.9)).toBe(false);
+  it('puffer is safe while swelling, deadly only during the inflated hold', () => {
+    expect(isPufferInflated(puffer, 0)).toBe(false); // start of cycle: still expanding (telegraph)
+    expect(hazardCellsAt(puffer, 0)).toEqual([]);
+    expect(isPufferInflated(puffer, puffer.period * 0.3)).toBe(true); // mid hold: deadly
+    expect(isPufferInflated(puffer, puffer.period * 0.9)).toBe(false); // collapsed
     expect(hazardCellsAt(puffer, puffer.period * 0.9)).toEqual([]);
+  });
+
+  it('puffer fills its precomputed open 3×3 footprint while inflated', () => {
+    const cells: Vec[] = [
+      { x: 2, y: 3 },
+      { x: 3, y: 3 },
+      { x: 4, y: 3 },
+    ];
+    const box: Hazard = { ...puffer, cells };
+    expect(hazardCellsAt(box, box.period * 0.3)).toEqual(cells);
   });
 });
 
