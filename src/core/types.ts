@@ -37,6 +37,19 @@ export interface Hazard {
   phase: number; // 0..1 seeded cycle offset
 }
 
+/**
+ * A spiked wall face. The player dies only if they slide in direction (dx,dy) and STOP at
+ * cell (x,y) because the wall just past it — at (x+dx, y+dy) — blocks them. Sliding past the
+ * cell, or stopping there from another direction, is safe: "go behind it, but hit that wall
+ * head-on and you die." Lives in a parallel array so the grid stays pure for reachability.
+ */
+export interface SpikeFace {
+  x: number; // the open cell the player stops in
+  y: number;
+  dx: number; // slide direction that is lethal here (unit)
+  dy: number;
+}
+
 /** A built, playable chamber. Mutated in place during play (dots become FLOOR, etc.). */
 export interface LevelData {
   grid: Grid;
@@ -45,6 +58,7 @@ export interface LevelData {
   start: Vec;
   exit: Vec;
   stars: Vec[];
+  spikes: SpikeFace[];
   hazards: Hazard[];
   dotsTotal: number;
 }

@@ -1,13 +1,16 @@
 import type { Game } from '../game/state';
-import type { Hazard } from '../core/types';
-import { W, DOT, STAR, SPIKE } from '../core/types';
-import { MOVE_INTERVAL } from '../game/constants';
+import type { Hazard, SpikeFace } from '../core/types';
+import { W, DOT, STAR } from '../core/types';
+import { MOVE_INTERVAL, CELL_SIZE, CAMERA_LOOKAHEAD } from '../game/constants';
 import type { Theme } from './theme';
 import { hazardCellsAt, isPufferInflated } from '../core/hazards';
 import { starPath } from './stars';
 
 export class Renderer {
   readonly ctx: CanvasRenderingContext2D;
+  /** Viewport size in CSS px (the canvas fills the portrait stage rectangle). */
+  private viewW = 0;
+  private viewH = 0;
 
   constructor(
     private canvas: HTMLCanvasElement,
@@ -18,14 +21,42 @@ export class Renderer {
     this.ctx = ctx;
   }
 
-  /** Fit the canvas to the stage and compute the cell size for the current grid. */
+  /** Fit the canvas to the (portrait) stage rectangle. Cell size is FIXED (CELL_SIZE) — bigger
+   *  chambers scroll under the follow-camera instead of shrinking — so zoom is identical. */
   resize(game: Game): void {
-    const size = Math.min(this.stage.clientWidth, this.stage.clientHeight);
+    const w = Math.max(1, this.stage.clientWidth);
+    const h = Math.max(1, this.stage.clientHeight);
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    this.canvas.width = size * dpr;
-    this.canvas.height = size * dpr;
+    this.canvas.width = Math.round(w * dpr);
+    this.canvas.height = Math.round(h * dpr);
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    game.cell = size / game.level.cols;
+    this.viewW = w;
+    this.viewH = h;
+    game.cell = CELL_SIZE;
+    // snap the camera onto the player so a fresh chamber opens centered, no pan-in.
+    const c = game.cell;
+    const t = this.cameraTarget(game, (game.player.x + 0.5) * c, (game.player.y + 0.5) * c, null);
+    game.camera.x = t.x;
+    game.camera.y = t.y;
+  }
+
+  /** Clamped top-left camera offset so `(fx,fy)` (plus look-ahead in `dir`) is centered. */
+  private cameraTarget(
+    game: Game,
+    fx: number,
+    fy: number,
+    dir: { dx: number; dy: number } | null,
+  ): { x: number; y: number } {
+    const cell = game.cell;
+    const lead = dir ? CAMERA_LOOKAHEAD * cell : 0;
+    const cx = fx + (dir ? dir.dx * lead : 0);
+    const cy = fy + (dir ? dir.dy * lead : 0);
+    const clamp = (target: number, world: number, view: number) =>
+      world <= view ? (world - view) / 2 : Math.max(0, Math.min(world - view, target - view / 2));
+    return {
+      x: clamp(cx, game.level.cols * cell, this.viewW),
+      y: clamp(cy, game.level.rows * cell, this.viewH),
+    };
   }
 
   /** Full redraw of the board, collectibles, exit gate and interpolated player. */
@@ -34,15 +65,42 @@ export class Renderer {
     const theme = game.theme;
     const { grid, rows, cols, exit, hazards } = game.level;
     const cell = game.cell;
+    const viewW = this.viewW;
+    const viewH = this.viewH;
     game.anim.t += dt;
-    const w = cols * cell;
-    const h = rows * cell;
-    ctx.clearRect(0, 0, w, h);
-    ctx.fillStyle = theme.bg;
-    ctx.fillRect(0, 0, w, h);
 
-    for (let y = 0; y < rows; y++) {
-      for (let x = 0; x < cols; x++) {
+    // interpolated player position (needed up front to drive the camera)
+    const moving = game.moving;
+    const f = moving ? Math.min(1, game.moveTimer / MOVE_INTERVAL) : 1;
+    const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
+    const dX = (moving ? lerp(game.player.x - moving.dx, game.player.x, f) : game.player.x) * cell;
+    const dY = (moving ? lerp(game.player.y - moving.dy, game.player.y, f) : game.player.y) * cell;
+    const pcx = dX + cell / 2;
+    const pcy = dY + cell / 2;
+
+    // smooth the follow-camera toward its clamped, look-ahead target
+    const target = this.cameraTarget(game, pcx, pcy, moving);
+    const k = Math.min(1, dt / 120);
+    game.camera.x += (target.x - game.camera.x) * k;
+    game.camera.y += (target.y - game.camera.y) * k;
+    const camX = game.camera.x;
+    const camY = game.camera.y;
+
+    // background fills the whole viewport (board may not cover it on big chambers)
+    ctx.clearRect(0, 0, viewW, viewH);
+    ctx.fillStyle = theme.bg;
+    ctx.fillRect(0, 0, viewW, viewH);
+
+    ctx.save();
+    ctx.translate(-camX, -camY);
+
+    // cull to the visible window (+1 cell margin) for big scrolling boards
+    const x0 = Math.max(0, Math.floor(camX / cell) - 1);
+    const y0 = Math.max(0, Math.floor(camY / cell) - 1);
+    const x1 = Math.min(cols - 1, Math.ceil((camX + viewW) / cell) + 1);
+    const y1 = Math.min(rows - 1, Math.ceil((camY + viewH) / cell) + 1);
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) {
         const t = grid[y][x];
         const cx = x * cell;
         const cy = y * cell;
@@ -69,25 +127,12 @@ export class Renderer {
           ctx.fill();
           ctx.restore();
           ctx.shadowBlur = 0;
-        } else if (t === SPIKE) {
-          ctx.fillStyle = theme.spike;
-          ctx.shadowColor = theme.spikeGlow;
-          ctx.shadowBlur = cell * 0.28;
-          const m = cell * 0.18;
-          const s = cell - m * 2;
-          for (let i = 0; i < 3; i++) {
-            const bx = cx + m + (s / 3) * i;
-            ctx.beginPath();
-            ctx.moveTo(bx, cy + cell - m);
-            ctx.lineTo(bx + s / 6, cy + m);
-            ctx.lineTo(bx + s / 3, cy + cell - m);
-            ctx.closePath();
-            ctx.fill();
-          }
-          ctx.shadowBlur = 0;
         }
       }
     }
+
+    // spiked wall faces (mounted on the wall, pointing into the open cell)
+    for (const s of game.level.spikes) this.drawSpikeFace(theme, s, cell);
 
     // dynamic hazards (above tiles, below exit/player)
     for (const hz of hazards) this.drawHazard(theme, hz, game.hazardClock, game.anim.t, cell);
@@ -106,14 +151,7 @@ export class Renderer {
     ctx.stroke();
     ctx.shadowBlur = 0;
 
-    // player glyph (interpolated between cells)
-    const moving = game.moving;
-    const f = moving ? Math.min(1, game.moveTimer / MOVE_INTERVAL) : 1;
-    const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
-    const dX = (moving ? lerp(game.player.x - moving.dx, game.player.x, f) : game.player.x) * cell;
-    const dY = (moving ? lerp(game.player.y - moving.dy, game.player.y, f) : game.player.y) * cell;
-    const pcx = dX + cell / 2;
-    const pcy = dY + cell / 2;
+    // player glyph (interpolated between cells; position computed above for the camera)
     ctx.fillStyle = theme.neon;
     ctx.shadowColor = theme.neonGlow;
     ctx.shadowBlur = cell * 0.5;
@@ -125,6 +163,39 @@ export class Renderer {
     const eo = cell * 0.12;
     ctx.fillRect(pcx - eo - cell * 0.05, pcy - cell * 0.06, cell * 0.1, cell * 0.14);
     ctx.fillRect(pcx + eo - cell * 0.05, pcy - cell * 0.06, cell * 0.1, cell * 0.14);
+
+    ctx.restore();
+  }
+
+  /** Draw a spike row on the wall face the player would impale themselves on. */
+  private drawSpikeFace(theme: Theme, s: SpikeFace, cell: number): void {
+    const ctx = this.ctx;
+    const cx = (s.x + 0.5) * cell;
+    const cy = (s.y + 0.5) * cell;
+    // Boundary midpoint between the open cell and the spiked wall, and the edge's tangent.
+    const bx = cx + s.dx * cell * 0.5;
+    const by = cy + s.dy * cell * 0.5;
+    const tx = -s.dy; // tangent (along the shared edge)
+    const ty = s.dx;
+    const depth = cell * 0.34; // how far the spikes jut into the cell
+    const half = cell * 0.5;
+    ctx.fillStyle = theme.spike;
+    ctx.shadowColor = theme.spikeGlow;
+    ctx.shadowBlur = cell * 0.28;
+    const teeth = 3;
+    for (let i = 0; i < teeth; i++) {
+      const a = -half + (cell / teeth) * i;
+      const b = a + cell / teeth;
+      ctx.beginPath();
+      ctx.moveTo(bx + tx * a, by + ty * a);
+      ctx.lineTo(bx + tx * b, by + ty * b);
+      // tip points into the open cell (opposite the wall direction)
+      const mid = (a + b) / 2;
+      ctx.lineTo(bx + tx * mid - s.dx * depth, by + ty * mid - s.dy * depth);
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.shadowBlur = 0;
   }
 
   /** Draw one wall cell in the chamber's current texture style. */

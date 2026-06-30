@@ -12,7 +12,8 @@ export interface Game {
   dotsLeft: number;
   starsGot: number;
   state: GameState;
-  cell: number; // pixel size of one cell, set by the renderer's resize()
+  cell: number; // pixel size of one cell (fixed CELL_SIZE), set by the renderer's resize()
+  camera: { x: number; y: number }; // top-left world offset (CSS px) of the follow-camera
   anim: { t: number };
   hazardClock: number; // ms accumulator driving dynamic-hazard positions
   theme: Theme; // per-chamber palette/texture, rotated by themeForChamber
@@ -43,6 +44,7 @@ export function createGame(idx = 0): Game {
     starsGot: 0,
     state: 'menu',
     cell: 0,
+    camera: { x: 0, y: 0 },
     anim: { t: 0 },
     hazardClock: 0,
     theme: themeForChamber(idx),

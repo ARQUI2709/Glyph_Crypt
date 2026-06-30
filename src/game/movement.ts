@@ -1,5 +1,6 @@
 import type { Game } from './state';
-import { W, FLOOR, DOT, STAR, SPIKE } from '../core/types';
+import { W, FLOOR, DOT, STAR } from '../core/types';
+import { STARS_PER_LEVEL } from './constants';
 import { hazardCellsAt } from '../core/hazards';
 import { blip } from '../audio/blip';
 
@@ -25,15 +26,23 @@ export function tryStartMove(game: Game, dx: number, dy: number): void {
 /** Advance one cell along the current slide, or stop at a wall. */
 export function stepSlide(game: Game, h: MovementHandlers): void {
   if (!game.moving) return;
-  const nx = game.player.x + game.moving.dx;
-  const ny = game.player.y + game.moving.dy;
+  const { dx, dy } = game.moving;
+  const nx = game.player.x + dx;
+  const ny = game.player.y + dy;
   if (isWall(game, nx, ny)) {
     game.moving = null;
+    // We stopped against this wall — die if its facing edge is spiked.
+    if (hitsSpike(game, game.player.x, game.player.y, dx, dy)) h.onDie();
     return;
   }
   game.player.x = nx;
   game.player.y = ny;
   onEnter(game, h);
+}
+
+/** True if a spiked wall face guards stopping at (x,y) after sliding in (dx,dy). */
+function hitsSpike(game: Game, x: number, y: number, dx: number, dy: number): boolean {
+  return game.level.spikes.some((s) => s.x === x && s.y === y && s.dx === dx && s.dy === dy);
 }
 
 /** Resolve the tile the player just entered: pickups, death, win. */
@@ -49,12 +58,16 @@ export function onEnter(game: Game, h: MovementHandlers): void {
     game.starsGot++;
     h.onStarsChanged();
     blip(990, 0.12);
-  } else if (t === SPIKE) {
-    h.onDie();
-    return;
   }
   if (checkHazards(game, h)) return;
-  if (game.player.x === exit.x && game.player.y === exit.y) h.onWin();
+  // The gate only opens once all 3 stars are collected ("grab all 3 stars, then the gate").
+  if (
+    game.player.x === exit.x &&
+    game.player.y === exit.y &&
+    game.starsGot >= STARS_PER_LEVEL
+  ) {
+    h.onWin();
+  }
 }
 
 /**

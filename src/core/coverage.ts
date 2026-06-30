@@ -50,3 +50,70 @@ export function slideCoverage(g: Grid, sx: number, sy: number): Coverage {
   }
   return { cov, dist };
 }
+
+const DIRS: [number, number][] = [
+  [1, 0],
+  [-1, 0],
+  [0, 1],
+  [0, -1],
+];
+
+/**
+ * Escapability check: is the slide-stop graph reachable from (sx,sy) strongly connected, i.e.
+ * can the player slide back to the start from EVERY stop they can reach? If so there are no
+ * one-way pockets — from anywhere you can get to, you can still reach the exit and every star,
+ * so the level can always be finished. Used as a generation gate alongside braiding.
+ */
+export function isEscapable(g: Grid, sx: number, sy: number): boolean {
+  const R = g.length;
+  const C = g[0].length;
+  const wall = (x: number, y: number) => x < 0 || y < 0 || x >= C || y >= R || g[y][x] === W;
+  const key = (x: number, y: number) => x + ',' + y;
+  const slideEnd = (x: number, y: number, dx: number, dy: number): string | null => {
+    let cx = x;
+    let cy = y;
+    while (!wall(cx + dx, cy + dy)) {
+      cx += dx;
+      cy += dy;
+    }
+    return cx === x && cy === y ? null : key(cx, cy);
+  };
+
+  // Forward BFS from start: collect all reachable stops + their slide edges.
+  const start = key(sx, sy);
+  const fwd = new Map<string, string[]>();
+  const nodes = new Set<string>([start]);
+  const queue: [number, number][] = [[sx, sy]];
+  while (queue.length) {
+    const [x, y] = queue.shift()!;
+    const adj: string[] = [];
+    for (const [dx, dy] of DIRS) {
+      const e = slideEnd(x, y, dx, dy);
+      if (!e) continue;
+      adj.push(e);
+      if (!nodes.has(e)) {
+        nodes.add(e);
+        const [ex, ey] = e.split(',').map(Number);
+        queue.push([ex, ey]);
+      }
+    }
+    fwd.set(key(x, y), adj);
+  }
+
+  // Reverse the edges, then BFS from start: which stops can slide back to it?
+  const rev = new Map<string, string[]>();
+  for (const n of nodes) rev.set(n, []);
+  for (const [from, adj] of fwd) for (const to of adj) rev.get(to)!.push(from);
+  const canReachStart = new Set<string>([start]);
+  const q2: string[] = [start];
+  while (q2.length) {
+    const k = q2.shift()!;
+    for (const p of rev.get(k) ?? []) {
+      if (!canReachStart.has(p)) {
+        canReachStart.add(p);
+        q2.push(p);
+      }
+    }
+  }
+  return canReachStart.size === nodes.size;
+}
