@@ -1,6 +1,6 @@
 {
   "name": "glyph-crypt",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "description": "Glyph Crypt — a neon slide-maze arcade game (browser, TypeScript).",
   "type": "module",
   "packageManager": "pnpm@11.1.3",
