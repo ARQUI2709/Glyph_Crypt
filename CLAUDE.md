@@ -44,9 +44,14 @@ ES modules under `src/`, in dependency order. The runtime is wired in `src/main.
   per chamber, so **chamber N always generates the same layout** (reproducible, testable,
   shareable). All generation takes an injected `Rng` instead of `Math.random`.
 - **`maze.ts`** — `roomsMaze(cols, rows, rng)`: a **Tomb-of-the-Mask-style layout** of open
-  rectangular rooms joined by 1-wide corridors, chained for connectivity with a few extra
-  loop links; returns `{ grid, start, rooms }`. Open rooms are what make spikes dodge-able and
-  prevent soft-locks. (`generateMaze` — the old perfect-maze backtracker — is kept for tests.)
+  rectangular rooms joined by 1-wide **staircased** corridors, chained for connectivity with a
+  few extra loop links; returns `{ grid, start, startRoom, rooms }`. The **start is a carved
+  dead-end stub** off a room (rule 4 — `carveDeadEndStub`). Open rooms are what make spikes
+  dodge-able and prevent soft-locks. **Fixed-zoom run cap (rule 6)**: `MAX_RUN = 9`; `longestRun`
+  measures the longest open straight run and `enforceRunCap(grid, MAX_RUN, start)` breaks any
+  over-length run by walling a well-connected (room-interior) cell — only when that keeps the
+  board escapable and orphans nothing (reverts otherwise). (`generateMaze` — the old perfect-maze
+  backtracker — is kept for tests.)
 - **`coverage.ts`** — `slideCoverage(grid, sx, sy)`: BFS where each "move" slides until a
   wall, mirroring player movement (covered cells + distance map). `isEscapable(grid, sx, sy)`:
   is the slide-stop graph **strongly connected** (can you always slide back to start)? Used as
@@ -56,34 +61,44 @@ ES modules under `src/`, in dependency order. The runtime is wired in `src/main.
   ordered `cells`, per-slide `segments`, `stops`, `arrivals` (where it stops & from which
   direction), and `exit`. **This is the backbone of route-first generation**: dots are only
   painted where this walk goes, so 100% is always collectible.
-- **`level.ts`** — `buildLevel(idx)` → `LevelData` (pure, seeded). Re-rolls terrain until it is
-  **escapable** and the clearing walk **covers every reachable cell** (so the player visits
-  every room and the dot-trail is complete). Then: `pickExit` puts the exit in a **different
-  room** than the start (farthest reachable room cell); 3 stars spaced along the walk; dots on
-  all covered floor; **`SpikeFace` spikes** mounted on wall faces the walk never stops against
-  (dodge-able, off the guaranteed route); gated **dynamic hazards**. The whole thing is wrapped
-  in a **winnability gate** — `isWinnable(level)` searches `(stop × stars-collected)` states to
-  confirm a real spike-aware run collects all 3 stars and reaches the exit; re-rolls if not.
+- **`level.ts`** — `buildLevel(idx)` → `LevelData` (pure, seeded). Re-rolls terrain until every
+  gate passes: run cap ≤ `MAX_RUN` (rule 6), **escapable**, **every room reachable** (rule 2),
+  and the clearing walk **covers every reachable cell** (so every room gets a collectible — rule
+  1, asserted by `everyRoomHasCollectible`). `buildChamberOnce` returns a `valid` flag so
+  `buildLevel` only ships a chamber that passed all gates **and** is `isWinnable`. `carveExit`
+  carves the exit as a **dead-end stub** (rule 5) off the farthest **different room** than the
+  start; 3 stars spaced along the walk; dots on all covered floor; **`SpikeFace` spikes** mounted
+  on wall faces the walk never stops against (dodge-able, off the guaranteed route); gated
+  **dynamic hazards** (the route's segments are passed in so moving ones land perpendicular). The
+  whole thing is wrapped in a **winnability gate** — `isWinnable(level)` searches `(stop ×
+  stars-collected)` states to confirm a real spike-aware run collects all 3 stars and reaches the
+  exit; re-rolls if not.
   `isSolvable` is the older spike-agnostic reachability check. **Progression**: `levelSize(idx)`
   returns portrait `{cols, rows}` bands, `unlockedHazards(idx)` (dart @2, puffer @4, saw @6),
   `dynamicBudget(idx)` caps the count.
 - **`hazards.ts`** — dynamic hazards as a parallel array on `LevelData`. `hazardCellsAt(h, t)`
   returns the **lethal cells as a pure function of a clock** `t` (the single source shared by
-  collision + rendering). `placeHazards(...)` anchors them on the **interior** of straight runs
-  (never on the turn-stops where the player rests). `pruneForRoute(...)` then drops any hazard
-  that threatens a route stop or makes a route segment un-crossable — so a hazard is **never the
-  sole blocker** and the clear-walk is always timing-passable.
+  collision + rendering). `placeHazards(..., route)` places **moving** hazards (dart/saw)
+  **perpendicular to the route** (rule 3): `routeAxisMap` records each route cell's slide axis,
+  and a dart/saw is mounted on a perpendicular straight run that the route only ever *crosses*
+  (never travels along), so it sweeps across the path rather than block it. Stationary **puffers**
+  (exempt) sit on the interior of straight runs. All anchor on a run's **interior** (never the
+  turn-stops where the player rests). `pruneForRoute(...)` then drops any hazard that threatens a
+  route stop or makes a route segment un-crossable — so a hazard is **never the sole blocker** and
+  the clear-walk is always timing-passable.
 
 ### `src/game` — runtime
 - **`state.ts`** — `Game` runtime object + `createGame` / `loadChamber`. Per chamber it also
   resets `hazardClock` (drives hazard timing) and resolves `theme` via `themeForChamber(idx)`.
 - **`constants.ts`** — `MOVE_INTERVAL`, `STARS_PER_LEVEL`, `CELL_SIZE` (fixed on-screen cell
   size — boards scroll, never shrink), `CAMERA_LOOKAHEAD`.
-- **`movement.ts`** — `tryStartMove` / `stepSlide` / `onEnter`, acting on a `Game` with
-  injected `MovementHandlers` (`onStarsChanged` / `onDie` / `onWin`). Mutates tiles in place.
-  Stopping a slide against a **spiked wall face** (`SpikeFace` matching the stop cell + slide
-  direction) kills the player. `checkHazards(game, h)` kills on intersecting a lethal hazard
-  cell. The **exit gate only opens once all 3 stars are collected**.
+- **`movement.ts`** — `tryStartMove(game, dx, dy, handlers)` / `stepSlide` / `onEnter`, acting on
+  a `Game` with injected `MovementHandlers` (`onStarsChanged` / `onDie` / `onWin`). Mutates tiles
+  in place. Every direction is always tappable (rule 7): tapping into a plain wall is a no-op, but
+  tapping into an **immediately-adjacent spiked wall face is lethal**. Stopping a slide against a
+  **spiked wall face** (`SpikeFace` matching the stop cell + slide direction) also kills.
+  `checkHazards(game, h)` kills on intersecting a lethal hazard cell. The **exit gate only opens
+  once all 3 stars are collected**.
 - **`loop.ts`** — `requestAnimationFrame` with a fixed-timestep movement accumulator; also
   advances `game.hazardClock` and calls `checkHazards` each frame (so a hazard sliding onto a
   still player connects).

@@ -3,14 +3,23 @@ import {
   buildLevel,
   isSolvable,
   isWinnable,
+  everyRoomHasCollectible,
   STARS_PER_LEVEL,
   levelSize,
   unlockedHazards,
   dynamicBudget,
 } from '../src/core/level';
-import { W, DOT, STAR } from '../src/core/types';
+import { W, FLOOR, DOT, STAR } from '../src/core/types';
 import { buildRoute } from '../src/core/route';
+import { routeAxisMap } from '../src/core/hazards';
 import { isEscapable } from '../src/core/coverage';
+import { longestRun, MAX_RUN } from '../src/core/maze';
+
+const openNeighbours = (grid: number[][] | string[][], p: { x: number; y: number }) =>
+  [[1, 0], [-1, 0], [0, 1], [0, -1]].filter(([dx, dy]) => {
+    const t = (grid as any)[p.y + dy]?.[p.x + dx];
+    return t !== undefined && t !== W;
+  }).length;
 
 describe('buildLevel', () => {
   it('is deterministic per chamber index', () => {
@@ -132,6 +141,41 @@ describe('buildLevel', () => {
     }
   });
 
+  it('no slide can travel past the viewport — every run is ≤ MAX_RUN (rule 6)', () => {
+    for (let i = 0; i < 20; i++) {
+      expect(longestRun(buildLevel(i).grid)).toBeLessThanOrEqual(MAX_RUN);
+    }
+  });
+
+  it('the start and the exit are both dead ends — one open neighbour each (rules 4 & 5)', () => {
+    for (let i = 0; i < 16; i++) {
+      const lvl = buildLevel(i);
+      expect(openNeighbours(lvl.grid, lvl.start)).toBe(1);
+      expect(openNeighbours(lvl.grid, lvl.exit)).toBe(1);
+    }
+  });
+
+  it('mounts every moving hazard perpendicular to the route it crosses (rule 3)', () => {
+    for (let i = 6; i < 16; i++) {
+      const lvl = buildLevel(i);
+      const route = buildRoute(lvl.grid, lvl.start.x, lvl.start.y);
+      const axis = routeAxisMap(route.segments);
+      for (const h of lvl.hazards) {
+        if (h.kind === 'puffer') continue; // stationary — exempt
+        const hazAxis = h.dx !== 0 ? 'h' : 'v';
+        let touchesRoute = false;
+        for (let k = 0; k < h.length; k++) {
+          const a = axis.get(h.x + h.dx * k + ',' + (h.y + h.dy * k));
+          if (!a) continue;
+          touchesRoute = true;
+          // the route may only CROSS the hazard line, never run along the hazard's own axis
+          expect(a[hazAxis]).toBe(false);
+        }
+        expect(touchesRoute).toBe(true);
+      }
+    }
+  });
+
   it('counts dots correctly', () => {
     const lvl = buildLevel(1);
     let dots = 0;
@@ -169,5 +213,33 @@ describe('hazard gating + budget', () => {
 
   it('produces identical hazards for the same chamber index', () => {
     expect(buildLevel(8).hazards).toEqual(buildLevel(8).hazards);
+  });
+});
+
+describe('everyRoomHasCollectible (rule 1)', () => {
+  const F = FLOOR;
+  const D = DOT;
+  const S = STAR;
+  const Wc = W;
+  it('is true only when every room rectangle holds a dot or star', () => {
+    const rooms = [
+      { x: 1, y: 1, w: 2, h: 2 },
+      { x: 5, y: 1, w: 2, h: 2 },
+    ];
+    const withDots = [
+      [Wc, Wc, Wc, Wc, Wc, Wc, Wc, Wc],
+      [Wc, D, F, Wc, Wc, S, F, Wc],
+      [Wc, F, F, Wc, Wc, F, F, Wc],
+      [Wc, Wc, Wc, Wc, Wc, Wc, Wc, Wc],
+    ] as any;
+    expect(everyRoomHasCollectible(withDots, rooms)).toBe(true);
+
+    const emptySecondRoom = [
+      [Wc, Wc, Wc, Wc, Wc, Wc, Wc, Wc],
+      [Wc, D, F, Wc, Wc, F, F, Wc],
+      [Wc, F, F, Wc, Wc, F, F, Wc],
+      [Wc, Wc, Wc, Wc, Wc, Wc, Wc, Wc],
+    ] as any;
+    expect(everyRoomHasCollectible(emptySecondRoom, rooms)).toBe(false);
   });
 });

@@ -73,8 +73,8 @@ const handlers: MovementHandlers = {
   },
 };
 
-attachKeyboard((dx, dy) => tryStartMove(game, dx, dy));
-attachTouch(stage, (dx, dy) => tryStartMove(game, dx, dy));
+attachKeyboard((dx, dy) => tryStartMove(game, dx, dy, handlers));
+attachTouch(stage, (dx, dy) => tryStartMove(game, dx, dy, handlers));
 window.addEventListener('resize', () => {
   if (game.state === 'playing') renderer.resize(game);
 });

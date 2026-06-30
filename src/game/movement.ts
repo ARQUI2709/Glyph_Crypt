@@ -15,10 +15,18 @@ function isWall(game: Game, x: number, y: number): boolean {
   return x < 0 || y < 0 || x >= cols || y >= rows || grid[y][x] === W;
 }
 
-/** Begin sliding in (dx,dy) if the immediate neighbor is open. */
-export function tryStartMove(game: Game, dx: number, dy: number): void {
+/**
+ * Attempt a move in (dx,dy). The player may always try any direction (rule 7): if the immediate
+ * neighbor is a plain wall nothing happens, but if that wall face is spiked the tap is lethal.
+ * Otherwise the slide begins.
+ */
+export function tryStartMove(game: Game, dx: number, dy: number, h: MovementHandlers): void {
   if (game.state !== 'playing' || game.moving) return;
-  if (isWall(game, game.player.x + dx, game.player.y + dy)) return;
+  if (isWall(game, game.player.x + dx, game.player.y + dy)) {
+    // Tapping into a wall is a no-op — unless its facing edge is spiked, which kills.
+    if (hitsSpike(game, game.player.x, game.player.y, dx, dy)) h.onDie();
+    return;
+  }
   game.moving = { dx, dy };
   game.moveTimer = 0;
 }

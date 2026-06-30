@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { hazardCellsAt, isPufferInflated, placeHazards } from '../src/core/hazards';
-import type { Hazard } from '../src/core/types';
+import { hazardCellsAt, isPufferInflated, placeHazards, routeAxisMap } from '../src/core/hazards';
+import type { Hazard, Vec } from '../src/core/types';
 import { W, FLOOR } from '../src/core/types';
 import { mulberry32 } from '../src/core/rng';
 
@@ -80,5 +80,53 @@ describe('placeHazards', () => {
         }
       }
     }
+  });
+});
+
+describe('routeAxisMap', () => {
+  it('records the slide axis of each route cell from its segments', () => {
+    const horiz: Vec[] = [
+      { x: 2, y: 3 },
+      { x: 3, y: 3 },
+      { x: 4, y: 3 },
+    ];
+    const vert: Vec[] = [
+      { x: 3, y: 1 },
+      { x: 3, y: 2 },
+    ];
+    const map = routeAxisMap([horiz, vert]);
+    expect(map.get('2,3')).toEqual({ h: true, v: false });
+    expect(map.get('3,2')).toEqual({ h: false, v: true });
+  });
+});
+
+describe('placeHazards — perpendicular moving hazards (rule 3)', () => {
+  // A "+" board: a horizontal route corridor (y=3) crossing a vertical run (x=3).
+  function plus() {
+    const grid = Array.from({ length: 7 }, () => Array(7).fill(W));
+    for (let x = 1; x <= 5; x++) grid[3][x] = FLOOR; // horizontal
+    for (let y = 1; y <= 5; y++) grid[y][3] = FLOOR; // vertical
+    return grid as any;
+  }
+  // The route slides horizontally across the centre, so (3,3) is crossed on the H axis.
+  const segment: Vec[] = [
+    { x: 2, y: 3 },
+    { x: 3, y: 3 },
+    { x: 4, y: 3 },
+    { x: 5, y: 3 },
+  ];
+
+  it('mounts a dart on the axis perpendicular to the route', () => {
+    const hz = placeHazards(plus(), mulberry32(1), ['dart'], 1, [], { segments: [segment] });
+    expect(hz.length).toBe(1);
+    const h = hz[0];
+    expect(h.kind).toBe('dart');
+    expect(h.dx).toBe(0); // vertical travel — perpendicular to the horizontal route
+    expect(h.dy).toBe(1);
+    expect(h.x).toBe(3);
+  });
+
+  it('places no moving hazard when given no route', () => {
+    expect(placeHazards(plus(), mulberry32(1), ['dart'], 1, [])).toEqual([]);
   });
 });

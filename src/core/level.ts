@@ -1,7 +1,7 @@
 import type { Grid, HazardKind, LevelData, Rng, SpikeFace, Vec } from './types';
 import { W, FLOOR, DOT, STAR, EXIT } from './types';
 import { mulberry32, rint, chamberSeed } from './rng';
-import { roomsMaze, type Room } from './maze';
+import { roomsMaze, carveDeadEndStub, enforceRunCap, longestRun, MAX_RUN, type Room } from './maze';
 import { slideCoverage, isEscapable } from './coverage';
 import { buildRoute } from './route';
 import { placeHazards, pruneForRoute } from './hazards';
@@ -56,40 +56,49 @@ const DIR4: [number, number][] = [
   [0, -1],
 ];
 
-/** The room rectangle containing (x,y), or null if the cell is a connecting corridor. */
-function roomOf(rooms: Room[], x: number, y: number): Room | null {
-  for (const r of rooms) if (x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h) return r;
+/**
+ * Carve the exit as a dead-end stub (rule 5) off the farthest DIFFERENT room than the start
+ * (by slide-distance), so a level always ends in another chamber and at a real dead end. Mutates
+ * `g` (opens the stub cell) and returns it, or null if no other reachable room can host a stub.
+ */
+function carveExit(g: Grid, start: Vec, startRoom: Room | null, rooms: Room[], rng: Rng): Vec | null {
+  const dist = slideCoverage(g, start.x, start.y).dist;
+  const roomDist = (r: Room): number => {
+    let best = -1;
+    for (let yy = r.y; yy < r.y + r.h; yy++)
+      for (let xx = r.x; xx < r.x + r.w; xx++) best = Math.max(best, dist[xx + ',' + yy] ?? -1);
+    return best;
+  };
+  const ordered = rooms
+    .filter((r) => r !== startRoom && roomDist(r) >= 0)
+    .sort((a, b) => roomDist(b) - roomDist(a));
+  const taken = new Set<string>([keyOf(start)]);
+  for (const r of ordered) {
+    const stub = carveDeadEndStub(g, r, rng, taken);
+    if (stub) return stub;
+  }
   return null;
 }
 
-/**
- * Choose the exit: the farthest reachable room cell (by slide-distance) that lies in a DIFFERENT
- * room than the start, so a level always ends in another chamber. Falls back to the farthest
- * covered cell if, somehow, no other room is reachable.
- */
-function pickExit(start: Vec, rooms: Room[], covered: Vec[], g: Grid): Vec {
-  const startRoom = roomOf(rooms, start.x, start.y);
-  const dist = slideCoverage(g, start.x, start.y).dist;
-  let best: Vec | null = null;
-  let bestD = -1;
-  for (const c of covered) {
-    const r = roomOf(rooms, c.x, c.y);
-    if (!r || r === startRoom) continue; // must be a room cell, and not the start's room
-    const d = dist[keyOf(c)] ?? 0;
-    if (d > bestD) {
-      bestD = d;
-      best = { x: c.x, y: c.y };
-    }
-  }
-  if (best) return best;
-  for (const c of covered) {
-    const d = dist[keyOf(c)] ?? 0;
-    if (d > bestD && !(c.x === start.x && c.y === start.y)) {
-      bestD = d;
-      best = { x: c.x, y: c.y };
-    }
-  }
-  return best ?? { ...start };
+/** True if every room has at least one cell the sliding player can reach (rule 2). */
+function everyRoomReachable(rooms: Room[], cov: Set<string>): boolean {
+  return rooms.every((r) => {
+    for (let yy = r.y; yy < r.y + r.h; yy++)
+      for (let xx = r.x; xx < r.x + r.w; xx++) if (cov.has(xx + ',' + yy)) return true;
+    return false;
+  });
+}
+
+/** True if every room contains at least one dot or star after painting (rule 1). */
+export function everyRoomHasCollectible(grid: Grid, rooms: Room[]): boolean {
+  return rooms.every((r) => {
+    for (let yy = r.y; yy < r.y + r.h; yy++)
+      for (let xx = r.x; xx < r.x + r.w; xx++) {
+        const t = grid[yy][xx];
+        if (t === DOT || t === STAR) return true;
+      }
+    return false;
+  });
 }
 
 /**
@@ -106,29 +115,45 @@ function pickExit(start: Vec, rooms: Room[], covered: Vec[], g: Grid): Vec {
  */
 export function buildLevel(idx: number, rng: Rng = mulberry32(chamberSeed(idx))): LevelData {
   let last!: LevelData;
-  for (let attempt = 0; attempt < 16; attempt++) {
-    last = buildChamberOnce(idx, rng);
-    if (isWinnable(last)) return last;
+  for (let attempt = 0; attempt < 24; attempt++) {
+    const { data, valid } = buildChamberOnce(idx, rng);
+    last = data;
+    // Only ship a chamber whose terrain passed every rule-gate AND is spike-aware winnable.
+    if (valid && isWinnable(data)) return data;
   }
   return last;
 }
 
-function buildChamberOnce(idx: number, rng: Rng): LevelData {
+function buildChamberOnce(idx: number, rng: Rng): { data: LevelData; valid: boolean } {
   const { cols, rows } = levelSize(idx);
-  // Terrain is connected rooms + corridors. We regenerate until it is escapable (no one-way
-  // pockets), has ≥2 rooms, and the clearing walk sweeps EVERY reachable cell — so the player
-  // visits every room and the dot-trail is a complete, followable path.
+  // Terrain is connected rooms + corridors. We regenerate until: no straight run exceeds the
+  // fixed-zoom slide cap (rule 6), there are ≥2 rooms, a dead-end exit can be carved in a
+  // different room (rule 5), the board is escapable (no one-way pockets), every room is reachable
+  // (rule 2), and the clearing walk sweeps EVERY reachable cell — so the dot-trail is complete
+  // and every room ends up rewarding (rule 1).
   let g!: ReturnType<typeof roomsMaze>['grid'];
   let start!: Vec;
   let rooms!: ReturnType<typeof roomsMaze>['rooms'];
+  let exit!: Vec;
   let route!: ReturnType<typeof buildRoute>;
   let covered!: Vec[];
-  for (let tries = 0; tries < 80; tries++) {
+  let valid = false;
+  for (let tries = 0; tries < 160; tries++) {
     const built = roomsMaze(cols, rows, rng);
     g = built.grid;
     start = built.start;
     rooms = built.rooms;
-    // always compute a route so g/start/route/covered are defined even on the final attempt
+    if (rooms.length < 2) continue;
+    if (longestRun(g) > MAX_RUN) continue; // rule 6: nothing slides past the viewport
+    // Carve the dead-end exit before routing so the walk routes over the final geometry.
+    const ex = carveExit(g, start, built.startRoom, rooms, rng);
+    if (!ex) continue;
+    exit = ex;
+    enforceRunCap(g, MAX_RUN, start); // the exit stub may have re-extended a run to the cap+1
+    if (longestRun(g) > MAX_RUN) continue; // rule 6 (belt-and-braces after both stubs)
+    if (!isEscapable(g, start.x, start.y)) continue;
+    const reachable = slideCoverage(g, start.x, start.y).cov;
+    if (!everyRoomReachable(rooms, reachable)) continue; // rule 2
     route = buildRoute(g, start.x, start.y);
     const seen = new Set<string>();
     covered = [];
@@ -139,14 +164,28 @@ function buildChamberOnce(idx: number, rng: Rng): LevelData {
         covered.push(c);
       }
     }
-    if (rooms.length < 2) continue;
-    if (!isEscapable(g, start.x, start.y)) continue;
-    const reachable = slideCoverage(g, start.x, start.y).cov;
     // require the walk to cover EVERY reachable cell (so no room is left empty/unvisited)
-    if (covered.length === reachable.size && covered.length > cols + rows) break;
+    if (covered.length === reachable.size && covered.length > cols + rows) {
+      valid = true;
+      break;
+    }
   }
 
-  const exit: Vec = pickExit(start, rooms, covered, g);
+  // Degenerate fallback (no attempt fully satisfied the gates): make sure exit/route/covered are
+  // defined so we never crash. buildLevel re-rolls on isWinnable, so this is rarely the final word.
+  if (!route) {
+    route = buildRoute(g, start.x, start.y);
+    const seen = new Set<string>();
+    covered = [];
+    for (const c of route.cells) {
+      const k = keyOf(c);
+      if (!seen.has(k)) {
+        seen.add(k);
+        covered.push(c);
+      }
+    }
+  }
+  if (!exit) exit = { ...route.exit };
 
   // 3 big stars: spaced along the walk (near / mid / far) and kept apart from each other.
   const distinctStops: Vec[] = [];
@@ -217,11 +256,14 @@ function buildChamberOnce(idx: number, rng: Rng): LevelData {
   }
   const spikes = spikeCandidates.slice(0, Math.min(spikeCandidates.length, 3 + idx));
 
-  // dynamic hazards: placed on straight corridors, gated + budgeted by chamber index, kept off
-  // the start, exit, stars and every route stop — then pruned so the guaranteed clearing walk
-  // stays crossable (no hazard is ever the sole blocker).
+  // dynamic hazards: moving ones (dart/saw) are mounted PERPENDICULAR to the route's direction so
+  // they sweep across the path rather than block it (rule 3); stationary puffers sit on corridor
+  // interiors. All are kept off the start, exit, stars and every route stop, then pruned so the
+  // guaranteed clearing walk stays crossable (no hazard is ever the sole blocker).
   const reserved: Vec[] = [start, exit, ...stars, ...route.stops];
-  const placed = placeHazards(g, rng, unlockedHazards(idx), dynamicBudget(idx), reserved);
+  const placed = placeHazards(g, rng, unlockedHazards(idx), dynamicBudget(idx), reserved, {
+    segments: route.segments,
+  });
   const hazards = pruneForRoute(placed, route.segments, route.stops);
 
   let dotsTotal = 0;
@@ -229,7 +271,10 @@ function buildChamberOnce(idx: number, rng: Rng): LevelData {
     for (let x = 0; x < cols; x++) if (g[y][x] === DOT) dotsTotal++;
   }
 
-  return { grid: g, rows, cols, start, exit, stars, spikes, hazards, dotsTotal };
+  return {
+    data: { grid: g, rows, cols, start, exit, stars, spikes, hazards, dotsTotal },
+    valid,
+  };
 }
 
 /**

@@ -171,13 +171,58 @@ function inPlace(cells: Vec[], v: Vec): boolean {
 }
 
 /**
- * Place dynamic hazards deterministically on straight corridors, avoiding the start, exit and
- * star cells. `kinds` is the set unlocked at this chamber (Phase A gating); `budget` caps how
- * many to place.
+ * For each route cell, which axis/axes the clearing walk slides through it on ('h' = horizontal,
+ * 'v' = vertical). Derived from each segment's own colinear cells, so it needs only the segments.
+ * Used to mount moving hazards on the PERPENDICULAR axis (rule 3). Single-cell segments are
+ * skipped (their axis is ambiguous without the origin stop, and they are too short to host one).
+ */
+export function routeAxisMap(segments: Vec[][]): Map<string, { h: boolean; v: boolean }> {
+  const map = new Map<string, { h: boolean; v: boolean }>();
+  for (const seg of segments) {
+    if (seg.length < 2) continue;
+    const horizontal = seg[0].y === seg[1].y;
+    for (const c of seg) {
+      const k = c.x + ',' + c.y;
+      const e = map.get(k) ?? { h: false, v: false };
+      if (horizontal) e.h = true;
+      else e.v = true;
+      map.set(k, e);
+    }
+  }
+  return map;
+}
+
+/** The maximal open (non-wall) straight run through (x,y) along axis 'h' or 'v'. */
+function maximalRun(grid: Grid, x: number, y: number, axis: 'h' | 'v'): Run | null {
+  const open = (cx: number, cy: number) => grid[cy]?.[cx] !== undefined && grid[cy][cx] !== W;
+  if (!open(x, y)) return null;
+  const dx = axis === 'h' ? 1 : 0;
+  const dy = axis === 'h' ? 0 : 1;
+  let sx = x;
+  let sy = y;
+  while (open(sx - dx, sy - dy)) {
+    sx -= dx;
+    sy -= dy;
+  }
+  let length = 0;
+  while (open(sx + dx * length, sy + dy * length)) length++;
+  return { x: sx, y: sy, dx, dy, length };
+}
+
+/** Route geometry placement needs from the clearing walk (just the per-slide segments). */
+export interface RouteInfo {
+  segments: Vec[][];
+}
+
+/**
+ * Place dynamic hazards deterministically, avoiding the start, exit, star and route-stop cells
+ * (passed in `reserved`). `kinds` is the set unlocked at this chamber; `budget` caps the count.
  *
- * Hazards anchor on the INTERIOR of a straight run (excluding its two end cells). In a single
- * corridor those end cells are turn-stops where the player rests, so keeping them clear means
- * there is always a safe place to stage from and time the crossing of the threatened interior.
+ * Moving hazards (dart/saw) are mounted PERPENDICULAR to the route's direction through a crossing
+ * cell, so they sweep ACROSS the guaranteed path (a timed threat the player glides past) rather
+ * than run along and block it — this needs the `route`. Stationary puffers (exempt from rule 3)
+ * sit on the interior of any straight run. Hazards anchor on a run's INTERIOR (excluding its two
+ * turn-stop ends), so there is always a safe staging cell to time the crossing from.
  */
 export function placeHazards(
   grid: Grid,
@@ -185,38 +230,53 @@ export function placeHazards(
   kinds: HazardKind[],
   budget: number,
   reserved: Vec[],
+  route?: RouteInfo,
 ): Hazard[] {
   if (kinds.length === 0 || budget <= 0) return [];
-  const runs = straightRuns(grid);
-  // Fisher–Yates shuffle (seeded) so placement is varied but reproducible.
-  for (let i = runs.length - 1; i > 0; i--) {
-    const j = rint(rng, i + 1);
-    [runs[i], runs[j]] = [runs[j], runs[i]];
-  }
-
   const hazards: Hazard[] = [];
   const taken: Vec[] = [...reserved];
   const blocked = (cells: Vec[]) => cells.some((c) => inPlace(taken, c));
 
-  for (const run of runs) {
-    if (hazards.length >= budget) break;
-    const inLen = run.length - 2; // interior length (drop the two turn-stop ends)
-    if (inLen < 1) continue;
-    const ax = run.x + run.dx; // interior start cell
-    const ay = run.y + run.dy;
-    // saws are always lethal somewhere on their span, so they need ≥2 interior cells to leave a
-    // gap to slip through; darts/puffers work on a single interior cell.
-    const fit = kinds.filter((k) => k !== 'saw' || inLen >= 2);
-    if (fit.length === 0) continue;
-    const kind = fit[rint(rng, fit.length)];
-
-    if (kind === 'puffer') {
-      const mid = Math.floor(run.length / 2); // an interior index (1..run.length-2)
-      const cell: Vec = { x: run.x + run.dx * mid, y: run.y + run.dy * mid };
-      if (inPlace(taken, cell)) continue;
-      taken.push(cell);
-      hazards.push({ kind, x: cell.x, y: cell.y, dx: 0, dy: 0, length: 1, period: PUFFER_PERIOD, phase: rng() });
-    } else {
+  // --- moving hazards: perpendicular crossings of the route (rule 3) ---
+  const movingKinds = kinds.filter((k) => k !== 'puffer');
+  if (route && movingKinds.length) {
+    const axis = routeAxisMap(route.segments);
+    const crossings: Run[] = [];
+    for (const [k, a] of axis) {
+      if (a.h && a.v) continue; // route slides both ways here — no single perpendicular
+      const [cx, cy] = k.split(',').map(Number);
+      const run = maximalRun(grid, cx, cy, a.h ? 'v' : 'h');
+      if (!run || run.length < 3) continue;
+      const atStart = cx === run.x && cy === run.y;
+      const atEnd = cx === run.x + run.dx * (run.length - 1) && cy === run.y + run.dy * (run.length - 1);
+      if (atStart || atEnd) continue; // crossing must be INTERIOR to its perpendicular run
+      // The route must only ever CROSS this line, never travel ALONG it — otherwise the hazard
+      // would run with the route, not across it. Skip runs the route slides down on their own axis.
+      const runAxisChar = run.dx !== 0 ? 'h' : 'v';
+      let alongRoute = false;
+      for (let s = 0; s < run.length && !alongRoute; s++) {
+        const a2 = axis.get(run.x + run.dx * s + ',' + (run.y + run.dy * s));
+        if (a2 && a2[runAxisChar]) alongRoute = true;
+      }
+      if (alongRoute) continue;
+      crossings.push(run);
+    }
+    // Fisher–Yates shuffle (seeded) so placement is varied but reproducible.
+    for (let i = crossings.length - 1; i > 0; i--) {
+      const j = rint(rng, i + 1);
+      [crossings[i], crossings[j]] = [crossings[j], crossings[i]];
+    }
+    for (const run of crossings) {
+      if (hazards.length >= budget) break;
+      const inLen = run.length - 2; // interior length (drop the two turn-stop ends)
+      if (inLen < 1) continue;
+      // saws are always lethal somewhere on their span, so they need ≥2 interior cells to leave a
+      // gap to slip through; darts work on a single interior cell.
+      const fit = movingKinds.filter((kk) => kk !== 'saw' || inLen >= 2);
+      if (fit.length === 0) continue;
+      const kind = fit[rint(rng, fit.length)];
+      const ax = run.x + run.dx;
+      const ay = run.y + run.dy;
       const cells: Vec[] = [];
       for (let i = 0; i < inLen; i++) cells.push({ x: ax + run.dx * i, y: ay + run.dy * i });
       if (blocked(cells)) continue;
@@ -233,5 +293,24 @@ export function placeHazards(
       });
     }
   }
+
+  // --- stationary puffers: interior of any straight run (exempt from rule 3) ---
+  if (kinds.includes('puffer') && hazards.length < budget) {
+    const runs = straightRuns(grid);
+    for (let i = runs.length - 1; i > 0; i--) {
+      const j = rint(rng, i + 1);
+      [runs[i], runs[j]] = [runs[j], runs[i]];
+    }
+    for (const run of runs) {
+      if (hazards.length >= budget) break;
+      if (run.length - 2 < 1) continue;
+      const mid = Math.floor(run.length / 2); // an interior index (1..run.length-2)
+      const cell: Vec = { x: run.x + run.dx * mid, y: run.y + run.dy * mid };
+      if (inPlace(taken, cell)) continue;
+      taken.push(cell);
+      hazards.push({ kind: 'puffer', x: cell.x, y: cell.y, dx: 0, dy: 0, length: 1, period: PUFFER_PERIOD, phase: rng() });
+    }
+  }
+
   return hazards;
 }
