@@ -173,16 +173,16 @@ export class Renderer {
     const cx = (s.x + 0.5) * cell;
     const cy = (s.y + 0.5) * cell;
     // Boundary midpoint between the open cell and the spiked wall, and the edge's tangent.
-    const bx = cx + s.dx * cell * 0.55;
-    const by = cy + s.dy * cell * 0.55;
+    const bx = cx + s.dx * cell * 0.6;
+    const by = cy + s.dy * cell * 0.6;
     const tx = -s.dy; // tangent (along the shared edge)
     const ty = s.dx;
-    const depth = cell * 0.1; // how far the spikes jut into the cell (0.3× the old 0.34)
+    const depth = cell * 0.25; // how far the spikes jut into the cell (0.3× the old 0.34)
     const half = cell * 0.5;
     ctx.fillStyle = theme.spike;
     ctx.shadowColor = theme.spikeGlow;
     ctx.shadowBlur = cell * 0.28;
-    const teeth = 6;
+    const teeth = 5;
     for (let i = 0; i < teeth; i++) {
       const a = -half + (cell / teeth) * i;
       const b = a + cell / teeth;
